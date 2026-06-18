@@ -4,10 +4,11 @@
 #include <thread>
 #include <chrono>
 #include "loom.hpp"
-
+#include "nexus.hpp"
 
 int main() {
     Kaelum::Loom loom;
+    Kaelum::Nexus nexus;
     
     auto init_res = loom.initialize();
     if (!init_res) {
@@ -15,24 +16,26 @@ int main() {
         return 1;
     }
 
-    std::println("Kaelum Loom initialized. PTY linked to fish shell.");
-    std::println("Press Ctrl+C to exit. (Reading from PTY...)\n");
+    std::println("Kaelum Loom and Nexus initialized. PTY linked to fish shell.");
+    std::println("Press Ctrl+C to exit. Processing output into grid...\n");
 
     std::vector<uint8_t> buffer(4096);
     
-    // Basic test loop: Poll PTY and print to screen
     while (true) {
         auto read_res = loom.poll_read(buffer);
         if (read_res) {
             size_t bytes = *read_res;
             if (bytes > 0) {
-                std::cout.write(reinterpret_cast<const char*>(buffer.data()), bytes);
-                std::cout.flush();
+                // Feed the data into the Nexus emulator
+                auto process_res = nexus.process_input({buffer.data(), bytes});
+                if (!process_res) {
+                    std::println(stderr, "Nexus parsing error.");
+                }
             }
         }
         
-        // Small sleep to prevent 100% CPU in this basic test
-        // In the real app, this will be replaced by a Vulkan frame loop.
+        // In a real app, this is the Vulkan frame loop.
+        // For now, we just sleep to prevent 100% CPU.
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 

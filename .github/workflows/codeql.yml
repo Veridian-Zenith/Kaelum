@@ -1,0 +1,85 @@
+name: CodeQL Analysis
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "33 21 * * 1"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      actions: read
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ["c-cpp"]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Install dependencies and LLVM 22
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y liburing-dev libvulkan-dev libwayland-dev wget ninja-build ccache mold
+          wget https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 22
+          sudo apt-get install -y clang-22 lld-22
+
+      - name: Cache compiler cache (ccache)
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/ccache
+          key: ${{ runner.os }}-ccache-${{ github.sha }}
+          restore-keys: ${{ runner.os }}-ccache-
+
+      - name: Cache build directory
+        uses: actions/cache@v5
+        with:
+          path: build
+          key: ${{ runner.os }}-build-${{ hashFiles('**/CMakeLists.txt', '**/src/**', '**/include/**') }}
+          restore-keys: ${{ runner.os }}-build-
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: manual
+          queries: security-extended
+
+      - name: Run manual build steps
+        shell: bash
+        env:
+          CODEQL_EXTRACTOR_CPP_TRAP_CACHING: false
+          CCACHE_DISABLE: "1"
+        run: |
+          echo "=== Starting CodeQL build ==="
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_C_COMPILER=clang-22 \
+            -DCMAKE_CXX_COMPILER=clang++-22 \
+            -DCMAKE_VERBOSE_MAKEFILE=ON
+          cmake --build build --verbose
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:${{matrix.language}}"
+          upload: true
+          wait-for-processing: true
