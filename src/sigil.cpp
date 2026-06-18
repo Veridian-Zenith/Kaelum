@@ -571,7 +571,10 @@ void Sigil::render(const Nexus& nexus) {
 void Sigil::on_resize(uint32_t width, uint32_t height) {
     vkDeviceWaitIdle(device_);
     cleanup_swapchain();
-    create_swapchain();
+    if (!create_swapchain()) {
+        std::println(stderr, "Sigil: Failed to recreate swapchain during resize");
+        return;
+    }
     create_framebuffers();
     record_command_buffers();
     
