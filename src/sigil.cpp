@@ -48,7 +48,8 @@ std::expected<void, SigilError> Sigil::initialize() {
     auto v_res = init_vulkan();
     if (!v_res) return std::unexpected(v_res.error());
 
-    create_swapchain();
+    auto s_res = create_swapchain();
+    if (!s_res) return std::unexpected(s_res.error());
     create_render_pass();
     create_framebuffers();
     create_graphics_pipeline();
@@ -236,20 +237,20 @@ std::expected<void, SigilError> Sigil::init_level_zero() {
     return {};
 }
 
-void Sigil::create_swapchain() {
+std::expected<void, SigilError> Sigil::create_swapchain() {
     VkSurfaceCapabilitiesKHR capabilities{};
     vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physical_device_, vk_surface_, &capabilities);
-
+ 
     uint32_t format_count;
     vkGetPhysicalDeviceSurfaceFormatsKHR(physical_device_, vk_surface_, &format_count, nullptr);
     std::vector<VkSurfaceFormatKHR> formats(format_count);
     vkGetPhysicalDeviceSurfaceFormatsKHR(physical_device_, vk_surface_, &format_count, formats.data());
-
+ 
     uint32_t present_mode_count;
     vkGetPhysicalDeviceSurfacePresentModesKHR(physical_device_, vk_surface_, &present_mode_count, nullptr);
     std::vector<VkPresentModeKHR> present_modes(present_mode_count);
     vkGetPhysicalDeviceSurfacePresentModesKHR(physical_device_, vk_surface_, &present_mode_count, present_modes.data());
-
+ 
     // Choose format (prefer B8G8R8A8_SRGB)
     VkSurfaceFormatKHR surface_format = formats[0];
     for (const auto& fmt : formats) {
@@ -258,7 +259,7 @@ void Sigil::create_swapchain() {
             break;
         }
     }
-
+ 
     // Choose present mode (prefer Mailbox for low latency, fall back to FIFO)
     VkPresentModeKHR present_mode = VK_PRESENT_MODE_FIFO_KHR;
     for (const auto& mode : present_modes) {
@@ -267,7 +268,7 @@ void Sigil::create_swapchain() {
             break;
         }
     }
-
+ 
     VkSwapchainCreateInfoKHR create_info{};
     create_info.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
     create_info.surface = vk_surface_;
@@ -285,17 +286,17 @@ void Sigil::create_swapchain() {
     create_info.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
     create_info.presentMode = present_mode;
     create_info.clipped = VK_TRUE;
-
+ 
     if (vkCreateSwapchainKHR(device_, &create_info, nullptr, &swapchain_) != VK_SUCCESS) {
         std::println(stderr, "Sigil: Failed to create swapchain");
-        return;
+        return std::unexpected(SigilError::AllocationFailed);
     }
-
+ 
     uint32_t image_count;
     vkGetSwapchainImagesKHR(device_, swapchain_, &image_count, nullptr);
     swapchain_images_.resize(image_count);
     vkGetSwapchainImagesKHR(device_, swapchain_, &image_count, swapchain_images_.data());
-
+ 
     swapchain_image_views_.resize(image_count);
     for (size_t i = 0; i < swapchain_images_.size(); ++i) {
         VkImageViewCreateInfo view_info{};
@@ -308,13 +309,15 @@ void Sigil::create_swapchain() {
         view_info.subresourceRange.levelCount = 1;
         view_info.subresourceRange.baseArrayLayer = 0;
         view_info.subresourceRange.layerCount = 1;
-
+ 
         if (vkCreateImageView(device_, &view_info, nullptr, &swapchain_image_views_[i]) != VK_SUCCESS) {
             std::println(stderr, "Sigil: Failed to create image view for swapchain image {}", i);
         }
     }
-        std::println("Sigil: Swapchain created with {} images.", image_count);
+    std::println("Sigil: Swapchain created with {} images.", image_count);
+    return {};
 }
+
 
 void Sigil::create_framebuffers() {
     swapchain_framebuffers_.resize(swapchain_image_views_.size());
