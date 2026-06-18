@@ -32,6 +32,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # ---- Options ----
 option(KAELUM_USE_MOLD "Use MOLD linker instead of LLD" ON)
 option(KAELUM_ENABLE_LEVEL_ZERO "Enable Intel Level Zero support" ON)
+option(KAELUM_USE_SYCL "Enable SYCL compatibility" ON)
 
 # ---- Architecture Selection ----
 set(KAELUM_ARCH "native" CACHE STRING "Target architecture for compilation (default: native)")
@@ -101,11 +102,10 @@ target_include_directories(kaelum_lib PUBLIC include ${WAYLAND_CLIENT_INCLUDE_DI
 
 if(KAELUM_ENABLE_LEVEL_ZERO)
     # Intel Level Zero is typically provided by oneAPI
-    # We search for it in standard and oneAPI paths
-    find_path(LEVEL_ZERO_INCLUDE_DIR level_zero.h
-        PATHS /opt/intel/oneapi/compiler/latest/include
-              /opt/intel/oneapi/compiler/2026.0/include
-              /usr/include
+    find_path(LEVEL_ZERO_INCLUDE_DIR ze_api.h
+        PATHS /usr/include/level_zero
+              /opt/intel/oneapi/compiler/latest/include/level_zero
+              /opt/intel/oneapi/compiler/2026.0/include/level_zero
     )
     find_library(LEVEL_ZERO_LIB ze_loader)
 
@@ -113,9 +113,27 @@ if(KAELUM_ENABLE_LEVEL_ZERO)
         target_link_libraries(kaelum_lib PUBLIC ${LEVEL_ZERO_LIB})
         target_include_directories(kaelum_lib PUBLIC ${LEVEL_ZERO_INCLUDE_DIR})
         target_compile_definitions(kaelum_lib PUBLIC KAELUM_WITH_LEVEL_ZERO)
-        message(STATUS "Intel Level Zero enabled.")
+        message(STATUS "Intel Level Zero enabled: ${LEVEL_ZERO_INCLUDE_DIR}")
     else()
         message(WARNING "Intel Level Zero not found. Disabling.")
+    endif()
+endif()
+
+if(KAELUM_USE_SYCL)
+    # SYCL typically requires the -fsycl flag and specific libraries
+    find_path(SYCL_INCLUDE_DIR sycl.hpp
+        PATHS /opt/intel/oneapi/compiler/latest/include
+              /opt/intel/oneapi/compiler/2026.0/include
+              /usr/include
+    )
+    
+    if(SYCL_INCLUDE_DIR)
+        target_compile_options(kaelum_lib PUBLIC -fsycl)
+        target_include_directories(kaelum_lib PUBLIC ${SYCL_INCLUDE_DIR})
+        target_compile_definitions(kaelum_lib PUBLIC KAELUM_WITH_SYCL)
+        message(STATUS "SYCL compatibility enabled: ${SYCL_INCLUDE_DIR}")
+    else()
+        message(WARNING "SYCL headers not found. Disabling SYCL compatibility.")
     endif()
 endif()
 
