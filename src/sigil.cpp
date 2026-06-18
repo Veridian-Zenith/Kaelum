@@ -65,6 +65,17 @@ static const struct wl_registry_listener registry_listener = {
     .global_remove = [](void*, struct wl_registry*, uint32_t) {}
 };
 
+// XDG Surface Helpers
+static void xdg_surface_handle_configure(void* data, struct xdg_surface* xdg_surface, uint32_t serial) {
+    Sigil* sigil = static_cast<Sigil*>(data);
+    std::println("Sigil: Received xdg_surface configure event (serial: {})", serial);
+    xdg_surface_ack_configure(xdg_surface, serial);
+}
+
+static const struct xdg_surface_listener xdg_surface_listener = {
+    .configure = xdg_surface_handle_configure,
+};
+
 std::expected<void, SigilError> Sigil::init_wayland() {
     display_ = wl_display_connect(nullptr);
     if (!display_) {
@@ -85,6 +96,8 @@ std::expected<void, SigilError> Sigil::init_wayland() {
     if (!wl_surface_) return std::unexpected(SigilError::SurfaceCreationFailed);
 
     xdg_surface_ = xdg_wm_base_get_xdg_surface(xdg_wm_base_, wl_surface_);
+    xdg_surface_add_listener(xdg_surface_, &xdg_surface_listener, this);
+    
     xdg_toplevel_ = xdg_surface_get_toplevel(xdg_surface_);
 
     xdg_toplevel_set_title(xdg_toplevel_, "Kaelum");
@@ -94,6 +107,12 @@ std::expected<void, SigilError> Sigil::init_wayland() {
 
     std::println("Sigil: Wayland surface created and mapped.");
     return {};
+}
+
+void Sigil::poll_events() {
+    while (wl_display_dispatch(display_) != 0) {
+        // Keep dispatching until the event queue is empty
+    }
 }
 
 std::expected<void, SigilError> Sigil::init_vulkan() {

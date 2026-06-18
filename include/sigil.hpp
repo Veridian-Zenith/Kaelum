@@ -46,9 +46,15 @@ namespace Kaelum {
         void render(const Nexus& nexus);
 
         /**
+         * @brief Polls Wayland events and updates surface state.
+         */
+        void poll_events();
+
+        /**
          * @brief Handles window resize events.
          */
         void on_resize(uint32_t width, uint32_t height);
+
 
     private:
         friend void registry_handle_global(void* data, struct wl_registry* registry, uint32_t id, const char* interface, uint32_t version);
@@ -82,5 +88,5 @@ namespace Kaelum {
         std::expected<void, SigilError> init_level_zero();
         void create_swapchain();
     };
-
 } // namespace Kaelum
+
