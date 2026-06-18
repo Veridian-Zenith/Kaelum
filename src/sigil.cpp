@@ -1,12 +1,14 @@
 #include "sigil.hpp"
 #include "wayland-protocols/xdg-shell-client-protocol.hpp"
 #include <vulkan/vulkan.h>
+#include <vulkan/vulkan_wayland.h>
 #include <wayland-client.h>
 #include <iostream>
 #include <print>
 #include <vector>
 #include <algorithm>
 #include <map>
+#include <fstream>
 
 #ifdef KAELUM_WITH_LEVEL_ZERO
 #include <ze_api.h>
@@ -18,10 +20,16 @@ namespace Kaelum {
 Sigil::Sigil() = default;
 
 Sigil::~Sigil() {
-    if (swapchain_ != VK_NULL_HANDLE) vkDestroySwapchainKHR(device_, swapchain_, nullptr);
+    if (swapchain_ != VK_NULL_HANDLE) {
+        cleanup_swapchain();
+        vkDestroySwapchainKHR(device_, swapchain_, nullptr);
+    }
     if (pipeline_layout_ != VK_NULL_HANDLE) vkDestroyPipelineLayout(device_, pipeline_layout_, nullptr);
     if (graphics_pipeline_ != VK_NULL_HANDLE) vkDestroyPipeline(device_, graphics_pipeline_, nullptr);
     if (render_pass_ != VK_NULL_HANDLE) vkDestroyRenderPass(device_, render_pass_, nullptr);
+    if (image_available_semaphore_ != VK_NULL_HANDLE) vkDestroySemaphore(device_, image_available_semaphore_, nullptr);
+    if (render_finished_semaphore_ != VK_NULL_HANDLE) vkDestroySemaphore(device_, render_finished_semaphore_, nullptr);
+    if (in_flight_fence_ != VK_NULL_HANDLE) vkDestroyFence(device_, in_flight_fence_, nullptr);
     if (device_ != VK_NULL_HANDLE) vkDestroyDevice(device_, nullptr);
     if (vk_surface_ != VK_NULL_HANDLE) vkDestroySurfaceKHR(instance_, vk_surface_, nullptr);
     if (instance_ != VK_NULL_HANDLE) vkDestroyInstance(instance_, nullptr);
@@ -38,6 +46,11 @@ std::expected<void, SigilError> Sigil::initialize() {
 
     auto v_res = init_vulkan();
     if (!v_res) return std::unexpected(v_res.error());
+
+    create_swapchain();
+    create_render_pass();
+    create_graphics_pipeline();
+    create_sync_objects();
 
     auto l_res = init_level_zero();
     if (!l_res) return std::unexpected(l_res.error());
@@ -121,9 +134,16 @@ std::expected<void, SigilError> Sigil::init_vulkan() {
     app_info.pApplicationName = "Kaelum";
     app_info.apiVersion = VK_API_VERSION_1_3;
 
+    std::vector<const char*> extensions = {
+        VK_KHR_SURFACE_EXTENSION_NAME,
+        VK_KHR_WAYLAND_SURFACE_EXTENSION_NAME
+    };
+
     VkInstanceCreateInfo create_info{};
     create_info.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
     create_info.pApplicationInfo = &app_info;
+    create_info.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
+    create_info.ppEnabledExtensionNames = extensions.data();
 
     if (vkCreateInstance(&create_info, nullptr, &instance_) != VK_SUCCESS) {
         return std::unexpected(SigilError::VulkanInitFailed);
@@ -137,6 +157,16 @@ std::expected<void, SigilError> Sigil::init_vulkan() {
     vkEnumeratePhysicalDevices(instance_, &device_count, devices.data());
     physical_device_ = devices[0];
 
+    // Create Wayland Surface
+    VkWaylandSurfaceCreateInfoKHR surface_create_info{};
+    surface_create_info.sType = VK_STRUCTURE_TYPE_WAYLAND_SURFACE_CREATE_INFO_KHR;
+    surface_create_info.display = display_;
+    surface_create_info.surface = wl_surface_;
+
+    if (vkCreateWaylandSurfaceKHR(instance_, &surface_create_info, nullptr, &vk_surface_) != VK_SUCCESS) {
+        return std::unexpected(SigilError::VulkanInitFailed);
+    }
+
     float queue_priority = 1.0f;
     VkDeviceQueueCreateInfo queue_create_info{};
     queue_create_info.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
@@ -149,6 +179,10 @@ std::expected<void, SigilError> Sigil::init_vulkan() {
     device_create_info.queueCreateInfoCount = 1;
     device_create_info.pQueueCreateInfos = &queue_create_info;
 
+    // Enable swapchain extension for the device
+    std::vector<const char*> device_extensions = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
+    device_create_info.enabledExtensionCount = static_cast<uint32_t>(device_extensions.size());
+    device_create_info.ppEnabledExtensionNames = device_extensions.data();
 
     if (vkCreateDevice(physical_device_, &device_create_info, nullptr, &device_) != VK_SUCCESS) {
         return std::unexpected(SigilError::VulkanInitFailed);
@@ -158,6 +192,7 @@ std::expected<void, SigilError> Sigil::init_vulkan() {
 
     return {};
 }
+
 
 std::expected<void, SigilError> Sigil::init_level_zero() {
 #ifdef KAELUM_WITH_LEVEL_ZERO
@@ -184,12 +219,316 @@ std::expected<void, SigilError> Sigil::init_level_zero() {
     return {};
 }
 
+void Sigil::create_swapchain() {
+    VkSurfaceCapabilitiesKHR capabilities{};
+    vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physical_device_, vk_surface_, &capabilities);
+
+    uint32_t format_count;
+    vkGetPhysicalDeviceSurfaceFormatsKHR(physical_device_, vk_surface_, &format_count, nullptr);
+    std::vector<VkSurfaceFormatKHR> formats(format_count);
+    vkGetPhysicalDeviceSurfaceFormatsKHR(physical_device_, vk_surface_, &format_count, formats.data());
+
+    uint32_t present_mode_count;
+    vkGetPhysicalDeviceSurfacePresentModesKHR(physical_device_, vk_surface_, &present_mode_count, nullptr);
+    std::vector<VkPresentModeKHR> present_modes(present_mode_count);
+    vkGetPhysicalDeviceSurfacePresentModesKHR(physical_device_, vk_surface_, &present_mode_count, present_modes.data());
+
+    // Choose format (prefer B8G8R8A8_SRGB)
+    VkSurfaceFormatKHR surface_format = formats[0];
+    for (const auto& fmt : formats) {
+        if (fmt.format == VK_FORMAT_B8G8R8A8_SRGB) {
+            surface_format = fmt;
+            break;
+        }
+    }
+
+    // Choose present mode (prefer Mailbox for low latency, fall back to FIFO)
+    VkPresentModeKHR present_mode = VK_PRESENT_MODE_FIFO_KHR;
+    for (const auto& mode : present_modes) {
+        if (mode == VK_PRESENT_MODE_MAILBOX_KHR) {
+            present_mode = mode;
+            break;
+        }
+    }
+
+    VkSwapchainCreateInfoKHR create_info{};
+    create_info.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
+    create_info.surface = vk_surface_;
+    create_info.minImageCount = capabilities.minImageCount + 1;
+    if (capabilities.maxImageCount > 0 && create_info.minImageCount > capabilities.maxImageCount) {
+        create_info.minImageCount = capabilities.maxImageCount;
+    }
+    create_info.imageFormat = surface_format.format;
+    create_info.imageColorSpace = surface_format.colorSpace;
+    create_info.imageExtent = { capabilities.currentExtent.width, capabilities.currentExtent.height };
+    create_info.imageArrayLayers = 1;
+    create_info.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    create_info.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    create_info.preTransform = capabilities.currentTransform;
+    create_info.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+    create_info.presentMode = present_mode;
+    create_info.clipped = VK_TRUE;
+
+    if (vkCreateSwapchainKHR(device_, &create_info, nullptr, &swapchain_) != VK_SUCCESS) {
+        std::println(stderr, "Sigil: Failed to create swapchain");
+        return;
+    }
+
+    uint32_t image_count;
+    vkGetSwapchainImagesKHR(device_, swapchain_, &image_count, nullptr);
+    swapchain_images_.resize(image_count);
+    vkGetSwapchainImagesKHR(device_, swapchain_, &image_count, swapchain_images_.data());
+
+    swapchain_image_views_.resize(image_count);
+    for (size_t i = 0; i < swapchain_images_.size(); ++i) {
+        VkImageViewCreateInfo view_info{};
+        view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        view_info.image = swapchain_images_[i];
+        view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        view_info.format = surface_format.format;
+        view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        view_info.subresourceRange.baseMipLevel = 0;
+        view_info.subresourceRange.levelCount = 1;
+        view_info.subresourceRange.baseArrayLayer = 0;
+        view_info.subresourceRange.layerCount = 1;
+
+        if (vkCreateImageView(device_, &view_info, nullptr, &swapchain_image_views_[i]) != VK_SUCCESS) {
+            std::println(stderr, "Sigil: Failed to create image view for swapchain image {}", i);
+        }
+    }
+    std::println("Sigil: Swapchain created with {} images.", image_count);
+}
+
+void Sigil::create_render_pass() {
+    VkAttachmentDescription color_attachment{};
+    color_attachment.format = VK_FORMAT_B8G8R8A8_SRGB;
+    color_attachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    color_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    color_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    color_attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    color_attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    color_attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    color_attachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+    VkAttachmentReference color_attachment_ref{};
+    color_attachment_ref.attachment = 0;
+    color_attachment_ref.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+    VkSubpassDescription subpass{};
+    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    subpass.colorAttachmentCount = 1;
+    subpass.pColorAttachments = &color_attachment_ref;
+
+    VkRenderPassCreateInfo render_pass_info{};
+    render_pass_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    render_pass_info.attachmentCount = 1;
+    render_pass_info.pAttachments = &color_attachment;
+    render_pass_info.subpassCount = 1;
+    render_pass_info.pSubpasses = &subpass;
+
+    if (vkCreateRenderPass(device_, &render_pass_info, nullptr, &render_pass_) != VK_SUCCESS) {
+        std::println(stderr, "Sigil: Failed to create render pass");
+    }
+}
+
+static VkShaderModule create_shader_module(VkDevice device, const std::string& filename) {
+    std::ifstream file(filename, std::ios::ate | std::ios::binary);
+    if (!file.is_open()) {
+        std::println(stderr, "Sigil: Failed to open shader file {}", filename);
+        return VK_NULL_HANDLE;
+    }
+
+    size_t fileSize = (size_t)file.tellg();
+    std::vector<char> buffer(fileSize);
+    file.seekg(0);
+    file.read(buffer.data(), fileSize);
+
+    VkShaderModuleCreateInfo createInfo{};
+    createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    createInfo.codeSize = fileSize;
+    createInfo.pCode = reinterpret_cast<const uint32_t*>(buffer.data());
+
+    VkShaderModule shaderModule;
+    if (vkCreateShaderModule(device, &createInfo, nullptr, &shaderModule) != VK_SUCCESS) {
+        std::println(stderr, "Sigil: Failed to create shader module from {}", filename);
+        return VK_NULL_HANDLE;
+    }
+    return shaderModule;
+}
+
+void Sigil::create_graphics_pipeline() {
+    VkShaderModule vertShaderModule = create_shader_module(device_, "shaders/test.vert");
+    VkShaderModule fragShaderModule = create_shader_module(device_, "shaders/test.frag");
+
+    VkPipelineShaderStageCreateInfo stages[2] = {};
+    stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = vertShaderModule;
+    stages[0].pName = "main";
+
+    stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].module = fragShaderModule;
+    stages[1].pName = "main";
+
+    VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
+    vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+
+    VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
+    inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    VkViewport viewport{};
+    viewport.x = 0.0f;
+    viewport.y = 0.0f;
+    viewport.width = 800.0f; 
+    viewport.height = 600.0f; 
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+
+    VkRect2D scissor{};
+    scissor.offset = {0, 0};
+    scissor.extent = {800, 600};
+
+    VkPipelineViewportStateCreateInfo viewportState{};
+    viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    viewportState.viewportCount = 1;
+    viewportState.pViewports = &viewport;
+    viewportState.scissorCount = 1;
+    viewportState.pScissors = &scissor;
+
+    VkPipelineRasterizationStateCreateInfo rasterizer{};
+    rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+    rasterizer.lineWidth = 1.0f;
+    rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
+    rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
+    rasterizer.depthClampEnable = VK_FALSE;
+
+    VkPipelineMultisampleStateCreateInfo multisampling{};
+    multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    multisampling.sampleShadingEnable = VK_FALSE;
+    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    VkPipelineColorBlendAttachmentState colorBlendAttachment{};
+    colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    colorBlendAttachment.blendEnable = VK_FALSE;
+
+    VkPipelineColorBlendStateCreateInfo colorBlending{};
+    colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    colorBlending.logicOpEnable = VK_FALSE;
+    colorBlending.attachmentCount = 1;
+    colorBlending.pAttachments = &colorBlendAttachment;
+
+    VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
+    pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+
+    if (vkCreatePipelineLayout(device_, &pipelineLayoutInfo, nullptr, &pipeline_layout_) != VK_SUCCESS) {
+        std::println(stderr, "Sigil: Failed to create pipeline layout");
+    }
+
+    VkGraphicsPipelineCreateInfo pipelineInfo{};
+    pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pipelineInfo.stageCount = 2;
+    pipelineInfo.pStages = stages;
+    pipelineInfo.pVertexInputState = &vertexInputInfo;
+    pipelineInfo.pInputAssemblyState = &inputAssembly;
+    pipelineInfo.pViewportState = &viewportState;
+    pipelineInfo.pRasterizationState = &rasterizer;
+    pipelineInfo.pMultisampleState = &multisampling;
+    pipelineInfo.pColorBlendState = &colorBlending;
+    pipelineInfo.layout = pipeline_layout_;
+    pipelineInfo.renderPass = render_pass_;
+    pipelineInfo.subpass = 0;
+
+    if (vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &graphics_pipeline_) != VK_SUCCESS) {
+        std::println(stderr, "Sigil: Failed to create graphics pipeline");
+    }
+
+    vkDestroyShaderModule(device_, vertShaderModule, nullptr);
+    vkDestroyShaderModule(device_, fragShaderModule, nullptr);
+}
+
+void Sigil::cleanup_swapchain() {
+    for (auto view : swapchain_image_views_) {
+        vkDestroyImageView(device_, view, nullptr);
+    }
+    swapchain_image_views_.clear();
+    swapchain_images_.clear();
+}
+
+void Sigil::create_sync_objects() {
+    VkSemaphoreCreateInfo semaphoreInfo{};
+    semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+
+    if (vkCreateSemaphore(device_, &semaphoreInfo, nullptr, &image_available_semaphore_) != VK_SUCCESS ||
+        vkCreateSemaphore(device_, &semaphoreInfo, nullptr, &render_finished_semaphore_) != VK_SUCCESS) {
+        std::println(stderr, "Sigil: Failed to create semaphores");
+    }
+
+    VkFenceCreateInfo fenceInfo{};
+    fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+
+    if (vkCreateFence(device_, &fenceInfo, nullptr, &in_flight_fence_) != VK_SUCCESS) {
+        std::println(stderr, "Sigil: Failed to create fence");
+    }
+}
+
 void Sigil::render(const Nexus& nexus) {
-    // Rendering implementation using Vulkan and Level Zero
+    vkWaitForFences(device_, 1, &in_flight_fence_, VK_TRUE, UINT64_MAX);
+    vkResetFences(device_, 1, &in_flight_fence_);
+
+    uint32_t image_index;
+    VkResult result = vkAcquireNextImageKHR(device_, swapchain_, UINT64_MAX, image_available_semaphore_, VK_NULL_HANDLE, &image_index);
+
+    if (result == VK_ERROR_OUT_OF_DATE_KHR) {
+        on_resize(0, 0); // Trigger recreation
+        return;
+    } else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
+        std::println(stderr, "Sigil: Failed to acquire swapchain image");
+        return;
+    }
+
+    VkSubmitInfo submitInfo{};
+    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+
+    VkSemaphore waitSemaphores[] = {image_available_semaphore_};
+    VkPipelineStageFlags waitStages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
+    submitInfo.waitSemaphoreCount = 1;
+    submitInfo.pWaitSemaphores = waitSemaphores;
+    submitInfo.pWaitDstStageMask = waitStages;
+
+    submitInfo.commandBufferCount = 0; // We'll need a command buffer to actually draw
+    
+    VkSemaphore signalSemaphores[] = {render_finished_semaphore_};
+    submitInfo.signalSemaphoreCount = 1;
+    submitInfo.pSignalSemaphores = signalSemaphores;
+
+    if (vkQueueSubmit(graphics_queue_, 1, &submitInfo, in_flight_fence_) != VK_SUCCESS) {
+        std::println(stderr, "Sigil: Failed to submit draw command buffer");
+    }
+
+    VkPresentInfoKHR presentInfo{};
+    presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+    presentInfo.waitSemaphoreCount = 1;
+    presentInfo.pWaitSemaphores = signalSemaphores;
+    presentInfo.swapchainCount = 1;
+    presentInfo.pSwapchains = &swapchain_;
+    presentInfo.pImageIndices = &image_index;
+
+    if (vkQueuePresentKHR(graphics_queue_, &presentInfo) != VK_SUCCESS) {
+        std::println(stderr, "Sigil: Failed to present swapchain image");
+    }
 }
 
 void Sigil::on_resize(uint32_t width, uint32_t height) {
-    // Handle swapchain recreation
+    vkDeviceWaitIdle(device_);
+    cleanup_swapchain();
+    create_swapchain();
+    
+    // In a real implementation, we'd also update viewport and scissor in the pipeline
+    std::println("Sigil: Swapchain recreated for size {}x{}", width, height);
 }
 
 } // namespace Kaelum
