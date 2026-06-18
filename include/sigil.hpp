@@ -7,6 +7,7 @@
 #include <vulkan/vulkan.h>
 #include "common.hpp"
 #include "nexus.hpp"
+#include "glyph_engine.hpp"
 
 // Wayland type aliases to avoid namespace collisions
 using WaylandDisplay = struct wl_display;
@@ -39,6 +40,11 @@ namespace Kaelum {
          * @brief Initializes the GPU pipeline and Wayland surface.
          */
         std::expected<void, SigilError> initialize();
+
+        /**
+         * @brief Initializes GPU assets like the glyph atlas.
+         */
+        void initialize_assets(GlyphEngine& engine);
 
         /**
          * @brief Renders the current Nexus grid to the screen.
@@ -92,6 +98,12 @@ namespace Kaelum {
         VkFence in_flight_fence_ = VK_NULL_HANDLE;
         uint32_t current_frame_ = 0;
 
+        // Glyph Atlas
+        VkImage glyph_atlas_image_ = VK_NULL_HANDLE;
+        VkDeviceMemory glyph_atlas_memory_ = VK_NULL_HANDLE;
+        VkImageView glyph_atlas_view_ = VK_NULL_HANDLE;
+        VkSampler glyph_atlas_sampler_ = VK_NULL_HANDLE;
+
         // Intel Level Zero handles (opaque pointers)
         void* lz_driver_ = nullptr;
         void* lz_device_ = nullptr;
@@ -100,7 +112,7 @@ namespace Kaelum {
         std::expected<void, SigilError> init_wayland();
         std::expected<void, SigilError> init_vulkan();
         std::expected<void, SigilError> init_level_zero();
-        void create_swapchain();
+        std::expected<void, SigilError> create_swapchain();
         void create_framebuffers();
         void create_render_pass();
         void create_graphics_pipeline();
@@ -108,6 +120,8 @@ namespace Kaelum {
         void create_command_pool();
         void record_command_buffers();
         void cleanup_swapchain();
+
+        void create_glyph_atlas(GlyphEngine& engine);
     };
 } // namespace Kaelum
 

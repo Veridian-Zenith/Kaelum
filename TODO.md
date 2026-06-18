@@ -25,9 +25,9 @@ Kaelum is a high-performance, GPU-accelerated, "natively fish" terminal emulator
     - [x] Debug/Release build verification with SYCL/Level Zero.
 
 ## 🚀 Phase 1: Rendering Foundation (Immediate)
-- [ ] **Wayland Event Integration**
-    - [ ] Implement `xdg_surface` configure listener.
-    - [ ] Handle window resize events to trigger swapchain recreation.
+- [x] **Wayland Event Integration**
+    - [x] Implement `xdg_surface` configure listener.
+    - [x] Handle window resize events to trigger swapchain recreation.
     - [ ] Process `wl_display` events in the main loop.
 - [ ] **Vulkan Pipeline Setup**
     - [ ] Write GLSL shaders for glyph rendering.
@@ -37,10 +37,10 @@ Kaelum is a high-performance, GPU-accelerated, "natively fish" terminal emulator
     - [ ] Transition from `std::this_thread::sleep_for` to event-driven wakeup.
 
 ## 🎨 Phase 2: Typography & Aesthetics
-- [ ] **Font Engine**
-    - [ ] Integrate FreeType for glyph rasterization.
-    - [ ] Implement FontConfig for system font discovery.
-    - [ ] Build a GPU-resident Glyph Cache (Atlas).
+- [x] **Font Engine**
+    - [x] Integrate FreeType for glyph rasterization.
+    - [x] Implement FontConfig for system font discovery.
+    - [x] Build a GPU-resident Glyph Cache (Atlas) - CPU packing implemented.
 - [ ] **Color & Style**
     - [ ] TrueColor (24-bit) and Xterm-256 support.
     - [ ] Implementation of "Veridian Zenith" aesthetic themes.

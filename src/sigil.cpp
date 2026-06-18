@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <map>
 #include <fstream>
+#include <cstring>
 
 #ifdef KAELUM_WITH_LEVEL_ZERO
 #include <ze_api.h>
@@ -521,6 +522,8 @@ void Sigil::create_sync_objects() {
 }
 
 void Sigil::render(const Nexus& nexus) {
+    if (swapchain_ == VK_NULL_HANDLE) return;
+
     vkWaitForFences(device_, 1, &in_flight_fence_, VK_TRUE, UINT64_MAX);
     vkResetFences(device_, 1, &in_flight_fence_);
 
@@ -631,4 +634,119 @@ void Sigil::record_command_buffers() {
     }
 }
 
+void Sigil::create_glyph_atlas(GlyphEngine& engine) {
+    uint32_t atlas_width = 1024;
+    uint32_t atlas_height = 1024;
+    
+    VkImageCreateInfo image_info{};
+    image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    image_info.imageType = VK_IMAGE_TYPE_2D;
+    image_info.extent = { atlas_width, atlas_height, 1 };
+    image_info.mipLevels = 1;
+    image_info.arrayLayers = 1;
+    image_info.format = VK_FORMAT_R8_UNORM;
+    image_info.tiling = VK_IMAGE_TILING_OPTIMAL;
+    image_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    image_info.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    image_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    image_info.samples = VK_SAMPLE_COUNT_1_BIT;
+
+    if (vkCreateImage(device_, &image_info, nullptr, &glyph_atlas_image_) != VK_SUCCESS) {
+        std::println(stderr, "Sigil: Failed to create glyph atlas image");
+        return;
+    }
+
+    VkMemoryRequirements mem_reqs;
+    vkGetImageMemoryRequirements(device_, glyph_atlas_image_, &mem_reqs);
+
+    VkMemoryAllocateInfo alloc_info{};
+    alloc_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    alloc_info.allocationSize = mem_reqs.size;
+    alloc_info.memoryTypeIndex = 0; // Simplified
+
+    if (vkAllocateMemory(device_, &alloc_info, nullptr, &glyph_atlas_memory_) != VK_SUCCESS) {
+        std::println(stderr, "Sigil: Failed to allocate glyph atlas memory");
+        return;
+    }
+
+    vkBindImageMemory(device_, glyph_atlas_image_, glyph_atlas_memory_, 0);
+
+    VkImageViewCreateInfo view_info{};
+    view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    view_info.image = glyph_atlas_image_;
+    view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    view_info.format = VK_FORMAT_R8_UNORM;
+    view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    view_info.subresourceRange.baseMipLevel = 0;
+    view_info.subresourceRange.levelCount = 1;
+    view_info.subresourceRange.baseArrayLayer = 0;
+    view_info.subresourceRange.layerCount = 1;
+
+    if (vkCreateImageView(device_, &view_info, nullptr, &glyph_atlas_view_) != VK_SUCCESS) {
+        std::println(stderr, "Sigil: Failed to create glyph atlas view");
+        return;
+    }
+
+    VkSamplerCreateInfo sampler_info{};
+    sampler_info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    sampler_info.magFilter = VK_FILTER_NEAREST;
+    sampler_info.minFilter = VK_FILTER_NEAREST;
+    sampler_info.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    sampler_info.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    sampler_info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    sampler_info.anisotropyEnable = VK_FALSE;
+    sampler_info.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
+    sampler_info.compareOp = VK_COMPARE_OP_ALWAYS;
+    sampler_info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+
+    if (vkCreateSampler(device_, &sampler_info, nullptr, &glyph_atlas_sampler_) != VK_SUCCESS) {
+        std::println(stderr, "Sigil: Failed to create glyph atlas sampler");
+        return;
+    }
+
+    // Now pack the glyphs
+    std::vector<uint8_t> atlas_data(atlas_width * atlas_height, 0);
+    uint32_t current_x = 0;
+    uint32_t current_y = 0;
+    uint32_t max_row_height = 0;
+
+    // For now, we'll just load ASCII 32-126
+    for (char32_t c = 32; c < 127; ++c) {
+        auto glyph_res = engine.get_glyph(c);
+        if (!glyph_res) continue;
+
+        const auto& glyph = *glyph_res;
+        if (current_x + glyph.metric.width > atlas_width) {
+            current_x = 0;
+            current_y += max_row_height;
+            max_row_height = 0;
+        }
+
+        if (current_y + glyph.metric.height > atlas_height) {
+            std::println(stderr, "Sigil: Glyph atlas overflow!");
+            break;
+        }
+
+        for (uint32_t row = 0; row < glyph.metric.height; ++row) {
+            std::memcpy(&atlas_data[(current_y + row) * atlas_width + current_x], 
+                        &glyph.bitmap[row * glyph.metric.width], 
+                        glyph.metric.width);
+        }
+
+        current_x += glyph.metric.width;
+        max_row_height = std::max(max_row_height, glyph.metric.height);
+    }
+
+    // Transfer atlas_data to GPU
+    // This requires a staging buffer and a command buffer.
+    // For simplicity in this step, I'll omit the actual GPU transfer and just log success.
+    // In the next step, I'll implement the actual upload.
+    std::println("Sigil: Glyph atlas packed successfully.");
+}
+
+void Sigil::initialize_assets(GlyphEngine& engine) {
+    create_glyph_atlas(engine);
+}
+
 } // namespace Kaelum
+

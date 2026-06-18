@@ -81,6 +81,11 @@ find_library(URING_LIB uring REQUIRED)
 
 # Wayland
 pkg_check_modules(WAYLAND_CLIENT REQUIRED wayland-client)
+pkg_check_modules(WAYLAND_CURSOR REQUIRED wayland-cursor)
+
+# Typography
+pkg_check_modules(FREETYPE REQUIRED freetype2)
+pkg_check_modules(FONTCONFIG REQUIRED fontconfig)
 
 # ---- Source & Executable ----
 # Split into library and executable for better organization
@@ -95,10 +100,13 @@ target_link_libraries(kaelum_lib PUBLIC
     ${URING_LIB} 
     Vulkan::Vulkan 
     ${WAYLAND_CLIENT_LIBRARIES}
+    ${WAYLAND_CURSOR_LIBRARIES}
+    ${FREETYPE_LIBRARIES}
+    ${FONTCONFIG_LIBRARIES}
     util # for forkpty
 )
 
-target_include_directories(kaelum_lib PUBLIC include ${WAYLAND_CLIENT_INCLUDE_DIRS})
+target_include_directories(kaelum_lib PUBLIC include ${WAYLAND_CLIENT_INCLUDE_DIRS} ${WAYLAND_CURSOR_INCLUDE_DIRS} ${FREETYPE_INCLUDE_DIRS} ${FONTCONFIG_INCLUDE_DIRS})
 
 if(KAELUM_ENABLE_LEVEL_ZERO)
     # Intel Level Zero is typically provided by oneAPI
