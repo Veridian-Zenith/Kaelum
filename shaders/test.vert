@@ -1,1 +1,14 @@
-#version 450\nlayout(location = 0) in vec2 inPos;\nlayout(location = 0) out vec4 outColor;\nvoid main() { gl_Position = vec4(inPos, 0.0, 1.0); outColor = vec4(0.1, 0.1, 0.1, 1.0); }
+#version 450
+
+layout(location = 0) in vec2 inPos;
+layout(location = 1) in vec2 inUV;
+layout(location = 2) in vec4 inColor;
+
+layout(location = 0) out vec2 outUV;
+layout(location = 0) out vec4 outColor;
+
+void main() {
+    gl_Position = vec4(inPos, 0.0, 1.0);
+    outUV = inUV;
+    outColor = inColor;
+}

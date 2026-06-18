@@ -9,6 +9,12 @@
 #include "nexus.hpp"
 #include "glyph_engine.hpp"
 
+struct SigilVertex {
+    float pos[2];
+    float uv[2];
+    float color[4];
+};
+
 // Wayland type aliases to avoid namespace collisions
 using WaylandDisplay = struct wl_display;
 using WaylandSurface = struct wl_surface;
@@ -98,11 +104,20 @@ namespace Kaelum {
         VkFence in_flight_fence_ = VK_NULL_HANDLE;
         uint32_t current_frame_ = 0;
 
+        // Vertex Buffer
+        VkBuffer vertex_buffer_ = VK_NULL_HANDLE;
+        VkDeviceMemory vertex_buffer_memory_ = VK_NULL_HANDLE;
+        void* vertex_buffer_mapped_ = nullptr;
+
         // Glyph Atlas
         VkImage glyph_atlas_image_ = VK_NULL_HANDLE;
         VkDeviceMemory glyph_atlas_memory_ = VK_NULL_HANDLE;
         VkImageView glyph_atlas_view_ = VK_NULL_HANDLE;
         VkSampler glyph_atlas_sampler_ = VK_NULL_HANDLE;
+
+        // Descriptor Sets
+        VkDescriptorPool descriptor_pool_ = VK_NULL_HANDLE;
+        VkDescriptorSet descriptor_set_ = VK_NULL_HANDLE;
 
         // Intel Level Zero handles (opaque pointers)
         void* lz_driver_ = nullptr;
@@ -121,6 +136,8 @@ namespace Kaelum {
         void record_command_buffers();
         void cleanup_swapchain();
 
+        void create_vertex_buffer();
+        void create_descriptor_set();
         void create_glyph_atlas(GlyphEngine& engine);
     };
 } // namespace Kaelum

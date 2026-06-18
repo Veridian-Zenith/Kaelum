@@ -37,6 +37,26 @@ int main() {
         std::println("Asset test complete. Exiting due to Sigil initialization failure.");
         return 1;
     }
+    
+    if (!sigil_res) {
+        std::println("Asset test complete. Exiting due to Sigil initialization failure.");
+        return 1;
+    }
+    
+    if (!sigil_res) {
+        std::println("Asset test complete. Exiting due to Sigil initialization failure.");
+        return 1;
+    }
+    
+    if (!sigil_res) {
+        std::println("Asset test complete. Exiting due to Sigil initialization failure.");
+        return 1;
+    }
+    
+    if (!sigil_res) {
+        std::println("Asset test complete. Exiting due to Sigil initialization failure.");
+        return 1;
+    }
  
     std::println("Kaelum Loom, Nexus, and Sigil initialized. PTY linked to fish shell.");
     std::println("Press Ctrl+C to exit. Processing output into grid...\n");
