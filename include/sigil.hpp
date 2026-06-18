@@ -2,8 +2,20 @@
 
 #include <expected>
 #include <memory>
+#include <vector>
+#include <wayland-client.h>
+#include <vulkan/vulkan.h>
 #include "common.hpp"
 #include "nexus.hpp"
+
+// Wayland type aliases to avoid namespace collisions
+using WaylandDisplay = struct wl_display;
+using WaylandSurface = struct wl_surface;
+using WaylandCompositor = struct wl_compositor;
+using WaylandRegistry = struct wl_registry;
+using XdgWmBase = struct xdg_wm_base;
+using XdgSurface = struct xdg_surface;
+using XdgToplevel = struct xdg_toplevel;
 
 namespace Kaelum {
 
@@ -11,7 +23,8 @@ namespace Kaelum {
         VulkanInitFailed,
         WaylandInitFailed,
         LevelZeroInitFailed,
-        AllocationFailed
+        AllocationFailed,
+        SurfaceCreationFailed
     };
 
     /**
@@ -32,8 +45,42 @@ namespace Kaelum {
          */
         void render(const Nexus& nexus);
 
+        /**
+         * @brief Handles window resize events.
+         */
+        void on_resize(uint32_t width, uint32_t height);
+
     private:
-        // Vulkan handles, Wayland surface, Level Zero device...
+        friend void registry_handle_global(void* data, struct wl_registry* registry, uint32_t id, const char* interface, uint32_t version);
+        // Wayland handles
+        WaylandDisplay* display_ = nullptr;
+        WaylandSurface* wl_surface_ = nullptr;
+        WaylandCompositor* compositor_ = nullptr;
+        WaylandRegistry* registry_ = nullptr;
+        XdgWmBase* xdg_wm_base_ = nullptr;
+        XdgSurface* xdg_surface_ = nullptr;
+        XdgToplevel* xdg_toplevel_ = nullptr;
+
+        // Vulkan handles
+        VkInstance instance_ = VK_NULL_HANDLE;
+        VkPhysicalDevice physical_device_ = VK_NULL_HANDLE;
+        VkDevice device_ = VK_NULL_HANDLE;
+        VkQueue graphics_queue_ = VK_NULL_HANDLE;
+        VkSurfaceKHR vk_surface_ = VK_NULL_HANDLE;
+        VkSwapchainKHR swapchain_ = VK_NULL_HANDLE;
+        VkRenderPass render_pass_ = VK_NULL_HANDLE;
+        VkPipeline graphics_pipeline_ = VK_NULL_HANDLE;
+        VkPipelineLayout pipeline_layout_ = VK_NULL_HANDLE;
+
+        // Intel Level Zero handles (opaque pointers)
+        void* lz_driver_ = nullptr;
+        void* lz_device_ = nullptr;
+
+        // Internal Helpers
+        std::expected<void, SigilError> init_wayland();
+        std::expected<void, SigilError> init_vulkan();
+        std::expected<void, SigilError> init_level_zero();
+        void create_swapchain();
     };
 
 } // namespace Kaelum

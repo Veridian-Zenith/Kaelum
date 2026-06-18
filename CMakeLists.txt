@@ -121,7 +121,7 @@ endif()
 
 if(KAELUM_USE_SYCL)
     # SYCL typically requires the -fsycl flag and specific libraries
-    find_path(SYCL_INCLUDE_DIR sycl.hpp
+    find_path(SYCL_INCLUDE_DIR sycl/sycl.hpp
         PATHS /opt/intel/oneapi/compiler/latest/include
               /opt/intel/oneapi/compiler/2026.0/include
               /usr/include
