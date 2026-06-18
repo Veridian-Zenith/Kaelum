@@ -738,10 +738,107 @@ void Sigil::create_glyph_atlas(GlyphEngine& engine) {
     }
 
     // Transfer atlas_data to GPU
-    // This requires a staging buffer and a command buffer.
-    // For simplicity in this step, I'll omit the actual GPU transfer and just log success.
-    // In the next step, I'll implement the actual upload.
-    std::println("Sigil: Glyph atlas packed successfully.");
+    VkBuffer staging_buffer;
+    VkDeviceMemory staging_buffer_memory;
+
+    VkBufferCreateInfo buffer_info{};
+    buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    buffer_info.size = atlas_data.size();
+    buffer_info.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    if (vkCreateBuffer(device_, &buffer_info, nullptr, &staging_buffer) != VK_SUCCESS) {
+        std::println(stderr, "Sigil: Failed to create staging buffer");
+        return;
+    }
+
+    VkMemoryRequirements mem_reqs_buf;
+    vkGetBufferMemoryRequirements(device_, staging_buffer, &mem_reqs_buf);
+
+    VkMemoryAllocateInfo alloc_info_buf{};
+    alloc_info_buf.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    alloc_info_buf.allocationSize = mem_reqs_buf.size;
+    alloc_info_buf.memoryTypeIndex = 0; // Simplified
+
+    if (vkAllocateMemory(device_, &alloc_info_buf, nullptr, &staging_buffer_memory) != VK_SUCCESS) {
+        std::println(stderr, "Sigil: Failed to allocate staging buffer memory");
+        return;
+    }
+
+    vkBindBufferMemory(device_, staging_buffer, staging_buffer_memory, 0);
+
+    void* data;
+    vkMapMemory(device_, staging_buffer_memory, 0, atlas_data.size(), 0, &data);
+    std::memcpy(data, atlas_data.data(), atlas_data.size());
+    vkUnmapMemory(device_, staging_buffer_memory);
+
+    VkCommandBufferAllocateInfo cb_alloc_info{};
+    cb_alloc_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    cb_alloc_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cb_alloc_info.commandPool = command_pool_;
+    cb_alloc_info.commandBufferCount = 1;
+
+    VkCommandBuffer upload_cb;
+    vkAllocateCommandBuffers(device_, &cb_alloc_info, &upload_cb);
+
+    VkCommandBufferBeginInfo begin_info{};
+    begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+    vkBeginCommandBuffer(upload_cb, &begin_info);
+
+    VkImageMemoryBarrier barrier{};
+    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.image = glyph_atlas_image_;
+    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    barrier.subresourceRange.baseMipLevel = 0;
+    barrier.subresourceRange.levelCount = 1;
+    barrier.subresourceRange.baseArrayLayer = 0;
+    barrier.subresourceRange.layerCount = 1;
+    barrier.srcAccessMask = 0;
+    barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+
+    vkCmdPipelineBarrier(upload_cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+    VkBufferImageCopy region{};
+    region.bufferOffset = 0;
+    region.bufferRowLength = 0;
+    region.bufferImageHeight = 0;
+    region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    region.imageSubresource.mipLevel = 0;
+    region.imageSubresource.baseArrayLayer = 0;
+    region.imageSubresource.layerCount = 1;
+    region.imageOffset = {0, 0, 0};
+    region.imageExtent = { atlas_width, atlas_height, 1 };
+
+    vkCmdCopyBufferToImage(upload_cb, staging_buffer, glyph_atlas_image_, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+
+    barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+    vkCmdPipelineBarrier(upload_cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+    vkEndCommandBuffer(upload_cb);
+
+    VkSubmitInfo submit_info{};
+    submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit_info.commandBufferCount = 1;
+    submit_info.pCommandBuffers = &upload_cb;
+
+    vkQueueSubmit(graphics_queue_, 1, &submit_info, VK_NULL_HANDLE);
+    vkQueueWaitIdle(graphics_queue_);
+
+    vkFreeCommandBuffers(device_, command_pool_, 1, &upload_cb);
+    vkDestroyBuffer(device_, staging_buffer, nullptr);
+    vkFreeMemory(device_, staging_buffer_memory, nullptr);
+
+    std::println("Sigil: Glyph atlas uploaded to GPU successfully.");
 }
 
 void Sigil::initialize_assets(GlyphEngine& engine) {
