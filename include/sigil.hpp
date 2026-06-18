@@ -74,11 +74,17 @@ namespace Kaelum {
         VkQueue graphics_queue_ = VK_NULL_HANDLE;
         VkSurfaceKHR vk_surface_ = VK_NULL_HANDLE;
         VkSwapchainKHR swapchain_ = VK_NULL_HANDLE;
+        VkExtent2D extent_ = {0, 0};
         std::vector<VkImage> swapchain_images_;
         std::vector<VkImageView> swapchain_image_views_;
+        std::vector<VkFramebuffer> swapchain_framebuffers_;
         VkRenderPass render_pass_ = VK_NULL_HANDLE;
         VkPipeline graphics_pipeline_ = VK_NULL_HANDLE;
         VkPipelineLayout pipeline_layout_ = VK_NULL_HANDLE;
+
+        // Command buffers
+        VkCommandPool command_pool_ = VK_NULL_HANDLE;
+        std::vector<VkCommandBuffer> command_buffers_;
 
         // Sync primitives
         VkSemaphore image_available_semaphore_ = VK_NULL_HANDLE;
@@ -95,9 +101,12 @@ namespace Kaelum {
         std::expected<void, SigilError> init_vulkan();
         std::expected<void, SigilError> init_level_zero();
         void create_swapchain();
+        void create_framebuffers();
         void create_render_pass();
         void create_graphics_pipeline();
         void create_sync_objects();
+        void create_command_pool();
+        void record_command_buffers();
         void cleanup_swapchain();
     };
 } // namespace Kaelum

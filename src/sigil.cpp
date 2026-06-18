@@ -50,6 +50,7 @@ std::expected<void, SigilError> Sigil::initialize() {
 
     create_swapchain();
     create_render_pass();
+    create_framebuffers();
     create_graphics_pipeline();
     create_sync_objects();
     create_command_pool();
@@ -92,6 +93,18 @@ static const struct xdg_surface_listener xdg_surface_listener = {
     .configure = xdg_surface_handle_configure,
 };
 
+// XDG Toplevel Helpers
+static void xdg_toplevel_handle_configure(void* data, struct xdg_toplevel* xdg_toplevel, int32_t width, int32_t height, uint32_t state) {
+    Sigil* sigil = static_cast<Sigil*>(data);
+    if (width > 0 && height > 0) {
+        sigil->on_resize(static_cast<uint32_t>(width), static_cast<uint32_t>(height));
+    }
+}
+
+static const struct xdg_toplevel_listener xdg_toplevel_listener = {
+    .configure = xdg_toplevel_handle_configure,
+};
+
 std::expected<void, SigilError> Sigil::init_wayland() {
     display_ = wl_display_connect(nullptr);
     if (!display_) {
@@ -115,6 +128,7 @@ std::expected<void, SigilError> Sigil::init_wayland() {
     xdg_surface_add_listener(xdg_surface_, &xdg_surface_listener, this);
     
     xdg_toplevel_ = xdg_surface_get_toplevel(xdg_surface_);
+    xdg_toplevel_add_listener(xdg_toplevel_, &xdg_toplevel_listener, this);
 
     xdg_toplevel_set_title(xdg_toplevel_, "Kaelum");
     xdg_toplevel_set_app_id(xdg_toplevel_, "org.veridian.kaelum");
@@ -263,7 +277,7 @@ void Sigil::create_swapchain() {
     }
     create_info.imageFormat = surface_format.format;
     create_info.imageColorSpace = surface_format.colorSpace;
-    create_info.imageExtent = { capabilities.currentExtent.width, capabilities.currentExtent.height };
+    create_info.imageExtent = extent_ = capabilities.currentExtent;
     create_info.imageArrayLayers = 1;
     create_info.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
     create_info.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
@@ -299,10 +313,30 @@ void Sigil::create_swapchain() {
             std::println(stderr, "Sigil: Failed to create image view for swapchain image {}", i);
         }
     }
-    std::println("Sigil: Swapchain created with {} images.", image_count);
+        std::println("Sigil: Swapchain created with {} images.", image_count);
+}
+
+void Sigil::create_framebuffers() {
+    swapchain_framebuffers_.resize(swapchain_image_views_.size());
+
+    for (size_t i = 0; i < swapchain_image_views_.size(); ++i) {
+        VkFramebufferCreateInfo framebufferInfo{};
+        framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        framebufferInfo.renderPass = render_pass_;
+        framebufferInfo.attachmentCount = 1;
+        framebufferInfo.pAttachments = &swapchain_image_views_[i];
+        framebufferInfo.width = extent_.width;
+        framebufferInfo.height = extent_.height;
+        framebufferInfo.layers = 1;
+
+        if (vkCreateFramebuffer(device_, &framebufferInfo, nullptr, &swapchain_framebuffers_[i]) != VK_SUCCESS) {
+            std::println(stderr, "Sigil: Failed to create framebuffer {}", i);
+        }
+    }
 }
 
 void Sigil::create_render_pass() {
+
     VkAttachmentDescription color_attachment{};
     color_attachment.format = VK_FORMAT_B8G8R8A8_SRGB;
     color_attachment.samples = VK_SAMPLE_COUNT_1_BIT;
@@ -453,6 +487,11 @@ void Sigil::create_graphics_pipeline() {
 }
 
 void Sigil::cleanup_swapchain() {
+    for (auto fb : swapchain_framebuffers_) {
+        vkDestroyFramebuffer(device_, fb, nullptr);
+    }
+    swapchain_framebuffers_.clear();
+
     for (auto view : swapchain_image_views_) {
         vkDestroyImageView(device_, view, nullptr);
     }
@@ -502,7 +541,8 @@ void Sigil::render(const Nexus& nexus) {
     submitInfo.pWaitSemaphores = waitSemaphores;
     submitInfo.pWaitDstStageMask = waitStages;
 
-    submitInfo.commandBufferCount = 0; // We'll need a command buffer to actually draw
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &command_buffers_[image_index];
     
     VkSemaphore signalSemaphores[] = {render_finished_semaphore_};
     submitInfo.signalSemaphoreCount = 1;
@@ -529,9 +569,11 @@ void Sigil::on_resize(uint32_t width, uint32_t height) {
     vkDeviceWaitIdle(device_);
     cleanup_swapchain();
     create_swapchain();
+    create_framebuffers();
+    record_command_buffers();
     
     // In a real implementation, we'd also update viewport and scissor in the pipeline
-    std::println("Sigil: Swapchain recreated for size {}x{}", width, height);
+    std::println("Sigil: Swapchain and framebuffers recreated for size {}x{}", width, height);
 }
 
 void Sigil::create_command_pool() {
@@ -564,6 +606,21 @@ void Sigil::record_command_buffers() {
         VkCommandBufferBeginInfo beginInfo{};
         beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
         if (vkBeginCommandBuffer(command_buffers_[i], &beginInfo) != VK_SUCCESS) continue;
+
+        VkClearValue clearColor = {{{0.05f, 0.05f, 0.07f, 1.0f}}}; // Dark Nordic background
+
+        VkRenderPassBeginInfo renderPassInfo{};
+        renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+        renderPassInfo.renderPass = render_pass_;
+        renderPassInfo.framebuffer = swapchain_framebuffers_[i];
+        renderPassInfo.renderArea.offset = {0, 0};
+        renderPassInfo.renderArea.extent = extent_;
+        renderPassInfo.clearValueCount = 1;
+        renderPassInfo.pClearValues = &clearColor;
+
+        vkCmdBeginRenderPass(command_buffers_[i], &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+        vkCmdEndRenderPass(command_buffers_[i]);
+        
         vkEndCommandBuffer(command_buffers_[i]);
     }
 }
