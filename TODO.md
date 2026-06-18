@@ -18,6 +18,8 @@ Kaelum is a high-performance, GPU-accelerated, "natively fish" terminal emulator
     - [x] Vulkan 1.3 instance and device initialization.
     - [x] Intel Level Zero (ze_api.h) driver binding.
     - [x] Native Wayland connection and `xdg_shell` surface mapping.
+    - [x] RenderPass, Graphics Pipeline, and Swapchain implementation.
+    - [x] Command buffer recording and synchronization.
 - [x] **CI/CD**
     - [x] CodeQL security analysis pipeline.
     - [x] Debug/Release build verification with SYCL/Level Zero.
@@ -28,8 +30,6 @@ Kaelum is a high-performance, GPU-accelerated, "natively fish" terminal emulator
     - [ ] Handle window resize events to trigger swapchain recreation.
     - [ ] Process `wl_display` events in the main loop.
 - [ ] **Vulkan Pipeline Setup**
-    - [ ] Create RenderPass and Graphics Pipeline.
-    - [ ] Implement Swapchain management (acquire/present).
     - [ ] Write GLSL shaders for glyph rendering.
 - [ ] **The Unified Main Loop**
     - [ ] Integrate Loom $\rightarrow$ Nexus $\rightarrow$ Sigil.

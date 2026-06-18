@@ -24,6 +24,7 @@ Sigil::~Sigil() {
         cleanup_swapchain();
         vkDestroySwapchainKHR(device_, swapchain_, nullptr);
     }
+    if (command_pool_ != VK_NULL_HANDLE) vkDestroyCommandPool(device_, command_pool_, nullptr);
     if (pipeline_layout_ != VK_NULL_HANDLE) vkDestroyPipelineLayout(device_, pipeline_layout_, nullptr);
     if (graphics_pipeline_ != VK_NULL_HANDLE) vkDestroyPipeline(device_, graphics_pipeline_, nullptr);
     if (render_pass_ != VK_NULL_HANDLE) vkDestroyRenderPass(device_, render_pass_, nullptr);
@@ -51,6 +52,8 @@ std::expected<void, SigilError> Sigil::initialize() {
     create_render_pass();
     create_graphics_pipeline();
     create_sync_objects();
+    create_command_pool();
+    record_command_buffers();
 
     auto l_res = init_level_zero();
     if (!l_res) return std::unexpected(l_res.error());
@@ -529,6 +532,40 @@ void Sigil::on_resize(uint32_t width, uint32_t height) {
     
     // In a real implementation, we'd also update viewport and scissor in the pipeline
     std::println("Sigil: Swapchain recreated for size {}x{}", width, height);
+}
+
+void Sigil::create_command_pool() {
+    VkCommandPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+    poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+    poolInfo.queueFamilyIndex = 0;
+
+    if (vkCreateCommandPool(device_, &poolInfo, nullptr, &command_pool_) != VK_SUCCESS) {
+        std::println(stderr, "Sigil: Failed to create command pool");
+    }
+}
+
+void Sigil::record_command_buffers() {
+    uint32_t image_count = static_cast<uint32_t>(swapchain_images_.size());
+    command_buffers_.resize(image_count);
+
+    VkCommandBufferAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    allocInfo.commandPool = command_pool_;
+    allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    allocInfo.commandBufferCount = image_count;
+
+    if (vkAllocateCommandBuffers(device_, &allocInfo, command_buffers_.data()) != VK_SUCCESS) {
+        std::println(stderr, "Sigil: Failed to allocate command buffers");
+        return;
+    }
+
+    for (uint32_t i = 0; i < image_count; ++i) {
+        VkCommandBufferBeginInfo beginInfo{};
+        beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        if (vkBeginCommandBuffer(command_buffers_[i], &beginInfo) != VK_SUCCESS) continue;
+        vkEndCommandBuffer(command_buffers_[i]);
+    }
 }
 
 } // namespace Kaelum
