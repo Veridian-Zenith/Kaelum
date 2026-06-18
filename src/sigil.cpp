@@ -94,7 +94,7 @@ static const struct xdg_surface_listener xdg_surface_listener = {
 };
 
 // XDG Toplevel Helpers
-static void xdg_toplevel_handle_configure(void* data, struct xdg_toplevel* xdg_toplevel, int32_t width, int32_t height, uint32_t state) {
+static void xdg_toplevel_handle_configure(void* data, struct xdg_toplevel* xdg_toplevel, int32_t width, int32_t height, struct wl_array* states) {
     Sigil* sigil = static_cast<Sigil*>(data);
     if (width > 0 && height > 0) {
         sigil->on_resize(static_cast<uint32_t>(width), static_cast<uint32_t>(height));
