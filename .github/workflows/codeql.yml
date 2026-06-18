@@ -71,7 +71,15 @@ jobs:
           CCACHE_DISABLE: "1"
         run: |
           echo "=== Starting CodeQL build ==="
-          source /opt/intel/oneapi/setvars.sh
+          # Dynamically find and source oneAPI setvars.sh
+          SETVARS_PATH=$(find /opt/intel -name setvars.sh | head -n 1)
+          if [ -n "$SETVARS_PATH" ]; then
+            echo "Found oneAPI setvars at: $SETVARS_PATH"
+            source "$SETVARS_PATH"
+          else
+            echo "oneAPI setvars.sh not found, attempting build without it"
+          fi
+          
           cmake -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Debug \
             -DCMAKE_C_COMPILER=clang-22 \
