@@ -115,9 +115,7 @@ void Nexus::process_csi(uint8_t final_char) {
     }
 }
 
-void Nexus::parse_sgr(std::span<const uint8_t> params) {
-    // Simplified SGR parsing for colors
-    // In a real implementation, this would handle 256-color and TrueColor
+void Nexus::parse_sgr(std::span<const uint8_t> /*params*/) {
 }
 
 void Nexus::move_cursor(int dx, int dy) {

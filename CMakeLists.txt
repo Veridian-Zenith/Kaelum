@@ -49,7 +49,7 @@ set(COMMON_FLAGS "-march=${KAELUM_ARCH} -pipe -fno-plt -fstack-protector-strong 
 -fstack-clash-protection -D_FORTIFY_SOURCE=3 -fPIE -flto=thin -fvisibility=hidden \
 -fexperimental-library -std=c++26")
 
-set(DEBUG_FLAGS "-g -fstandalone-debug -fno-omit-frame-pointer")
+set(DEBUG_FLAGS "-g -O1 -fstandalone-debug -fno-omit-frame-pointer")
 set(RELEASE_FLAGS "-O3 -DNDEBUG")
 
 set(CMAKE_CXX_FLAGS "${COMMON_FLAGS} ${DEBUG_FLAGS}" CACHE STRING "" FORCE)

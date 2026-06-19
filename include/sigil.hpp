@@ -130,7 +130,6 @@ namespace Kaelum {
         VkSemaphore image_available_semaphore_ = VK_NULL_HANDLE;
         VkSemaphore render_finished_semaphore_ = VK_NULL_HANDLE;
         VkFence in_flight_fence_ = VK_NULL_HANDLE;
-        uint32_t current_frame_ = 0;
 
         // Vertex Buffer
         VkBuffer vertex_buffer_ = VK_NULL_HANDLE;

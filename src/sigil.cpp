@@ -114,7 +114,7 @@ static const struct wl_registry_listener registry_listener = {
 };
 
 // XDG Surface Helpers
-static void xdg_surface_handle_configure(void* data, struct xdg_surface* xdg_surface, uint32_t serial) {
+static void xdg_surface_handle_configure(void* /*data*/, struct xdg_surface* xdg_surface, uint32_t serial) {
     std::println("Sigil: Received xdg_surface configure event (serial: {})", serial);
     xdg_surface_ack_configure(xdg_surface, serial);
 }
