@@ -1,0 +1,16 @@
+# ninja log v7
+3	1413	1781864338830841918	CMakeFiles/kaelum_lib.dir/src/xdg-shell-client-protocol.cpp.o	928796fb68f3a2f
+2	3461	1781867634293325423	CMakeFiles/kaelum_lib.dir/src/nexus.cpp.o	f883b6f4775527ec
+3	9954	1781866620204667686	CMakeFiles/kaelum_lib.dir/src/glyph_engine.cpp.o	fc270c935de4c017
+1	2414	1781867382898212689	CMakeFiles/kaelum_lib.dir/src/loom.cpp.o	ac8a8543f0fed380
+2	14027	1781867634294624721	CMakeFiles/kaelum_lib.dir/src/sigil.cpp.o	f20638c89278401f
+14027	14084	1781867648318333513	libkaelum_lib.a	20d8dc9900e7cac1
+2	12557	1781867634295015221	CMakeFiles/kaelum.dir/src/main.cpp.o	73aa5d625f149009
+14084	17119	1781867648375333546	kaelum	d835c6177b87d1f2
+26	200	1781864035595409149	/home/dae/VZ_Dev/work/Kaelum/shaders/test.frag.spv	57fd837a2b370dd0
+27	248	1781864035651409237	/home/dae/VZ_Dev/work/Kaelum/shaders/test.vert.spv	61916f757927bb91
+2	4133	1781867811064437871	CMakeFiles/kaelum_lib.dir/src/loom.cpp.o	ac8a8543f0fed380
+2	10522	1781867811065815566	CMakeFiles/kaelum.dir/src/main.cpp.o	73aa5d625f149009
+2	11271	1781867811065690164	CMakeFiles/kaelum_lib.dir/src/sigil.cpp.o	f20638c89278401f
+11272	11326	1781867822334445731	libkaelum_lib.a	20d8dc9900e7cac1
+11326	13427	1781867822388445768	kaelum	d835c6177b87d1f2
