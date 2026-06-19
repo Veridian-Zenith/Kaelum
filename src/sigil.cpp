@@ -172,6 +172,10 @@ static const struct wl_pointer_listener pointer_listener_inst = {
     .motion = [](void*, struct wl_pointer*, uint32_t, wl_fixed_t, wl_fixed_t) {},
     .button = [](void*, struct wl_pointer*, uint32_t, uint32_t, uint32_t, uint32_t) {},
     .axis = [](void*, struct wl_pointer*, uint32_t, uint32_t, wl_fixed_t) {},
+    .frame = [](void*, struct wl_pointer*) {},
+    .axis_source = [](void*, struct wl_pointer*, uint32_t) {},
+    .axis_stop = [](void*, struct wl_pointer*, uint32_t, uint32_t) {},
+    .axis_discrete = [](void*, struct wl_pointer*, uint32_t, int32_t) {},
 };
 
 static void keyboard_handle_key(void* data, struct wl_keyboard* keyboard, uint32_t serial, uint32_t time, uint32_t key, uint32_t state) {
