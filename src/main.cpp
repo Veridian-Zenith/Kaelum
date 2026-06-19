@@ -48,7 +48,7 @@ int main() {
     });
 
     // Set initial PTY size
-    loom.set_pty_size(static_cast<uint16_t>(k_default_cols), static_cast<uint16_t>(k_default_rows));
+    loom.set_pty_size(static_cast<uint16_t>(Kaelum::k_default_cols), static_cast<uint16_t>(Kaelum::k_default_rows));
 
     // Map Linux input scancodes to ASCII
     std::map<uint32_t, char> key_map = {
