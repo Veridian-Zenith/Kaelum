@@ -5,6 +5,7 @@
 #include <iostream>
 #include <cstring>
 #include <algorithm>
+#include <sys/eventfd.h>
 
 namespace Kaelum {
 
@@ -58,6 +59,18 @@ std::expected<void, LoomError> Loom::initialize() {
     io_uring_submit(&ring_);
 
     return {};
+}
+
+std::expected<int, LoomError> Loom::register_wake_fd() {
+    int wake_fd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+    if (wake_fd < 0) {
+        return std::unexpected(LoomError::UringInitFailed);
+    }
+    if (io_uring_register_eventfd(&ring_, wake_fd) < 0) {
+        close(wake_fd);
+        return std::unexpected(LoomError::UringInitFailed);
+    }
+    return wake_fd;
 }
 
 std::expected<size_t, LoomError> Loom::poll_read(std::span<uint8_t> buffer) {

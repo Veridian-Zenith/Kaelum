@@ -51,6 +51,11 @@ namespace Kaelum {
          */
         int master_fd() const { return master_fd_; }
 
+        /**
+         * @brief Registers a wake FD for io_uring completions.
+         */
+        std::expected<int, LoomError> register_wake_fd();
+
     private:
         int master_fd_ = -1;
         pid_t child_pid_ = -1;

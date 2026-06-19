@@ -21,13 +21,16 @@ namespace Kaelum {
         constexpr bool operator==(const Color&) const = default;
     };
 
+    constexpr Color nord_bg = {46, 52, 64, 255};
+    constexpr Color nord_fg = {216, 222, 233, 255};
+
     /**
      * @brief A single terminal cell
      */
     struct Cell {
         char32_t codepoint = U' ';
-        Color fg = {255, 255, 255, 255};
-        Color bg = {0, 0, 0, 255};
+        Color fg = nord_fg;
+        Color bg = nord_bg;
         uint32_t attrs = 0; // Bold, Italic, Underline, etc.
 
         constexpr bool operator==(const Cell&) const = default;

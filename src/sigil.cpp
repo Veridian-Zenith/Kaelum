@@ -47,21 +47,30 @@ std::expected<void, SigilError> Sigil::initialize() {
     if (!w_res) return std::unexpected(w_res.error());
 
     auto v_res = init_vulkan();
+    std::cout << "Sigil: Vulkan init finished" << std::endl;
     if (!v_res) return std::unexpected(v_res.error());
 
     auto s_res = create_swapchain();
+    std::cout << "Sigil: Swapchain created" << std::endl;
     if (!s_res) return std::unexpected(s_res.error());
     create_render_pass();
+    std::cout << "Sigil: Render pass created" << std::endl;
     create_framebuffers();
+    std::cout << "Sigil: Framebuffers created" << std::endl;
     create_graphics_pipeline();
+    std::cout << "Sigil: Pipeline created" << std::endl;
     create_sync_objects();
+    std::cout << "Sigil: Sync objects created" << std::endl;
     create_command_pool();
+    std::cout << "Sigil: Command pool created" << std::endl;
     record_command_buffers();
+    std::cout << "Sigil: Command buffers recorded" << std::endl;
     create_vertex_buffer();
-    create_descriptor_set();
-
+    std::cout << "Sigil: Vertex buffer created" << std::endl;
+    
     auto l_res = init_level_zero();
     if (!l_res) return std::unexpected(l_res.error());
+
 
     std::println("Sigil: Full hardware pipeline initialized successfully.");
     return {};
@@ -78,6 +87,9 @@ void registry_handle_global(void* data, struct wl_registry* registry, uint32_t i
     } else if (iface == "xdg_wm_base") {
         sigil->xdg_wm_base_ = (struct xdg_wm_base*)wl_registry_bind(registry, id, &xdg_wm_base_interface, version);
         std::println("Sigil: Bound xdg_wm_base");
+    } else if (iface == "wl_seat") {
+        sigil->seat_ = (struct wl_seat*)wl_registry_bind(registry, id, &wl_seat_interface, version);
+        std::println("Sigil: Bound wl_seat");
     }
 }
 
@@ -109,26 +121,51 @@ static void xdg_toplevel_handle_configure(void* data, struct xdg_toplevel* xdg_t
 static const struct xdg_toplevel_listener xdg_toplevel_listener = {
     .configure = xdg_toplevel_handle_configure,
     .close = [](void*, struct xdg_toplevel*) {},
+    .configure_bounds = [](void*, struct xdg_toplevel*, int32_t, int32_t) {},
+    .wm_capabilities = [](void*, struct xdg_toplevel*, struct wl_array*) {},
+};
+
+static void keyboard_handle_key(void* data, struct wl_keyboard* keyboard, uint32_t serial, uint32_t time, uint32_t key, uint32_t state) {
+    (void)keyboard;
+    (void)serial;
+    (void)time;
+    Sigil* sigil = static_cast<Sigil*>(data);
+    sigil->handle_key_event(key, state == WL_KEYBOARD_KEY_STATE_PRESSED);
+}
+
+static const struct wl_keyboard_listener keyboard_listener = {
+    .keymap = [](void*, struct wl_keyboard*, uint32_t, int32_t, uint32_t) {},
+    .enter = [](void*, struct wl_keyboard*, uint32_t, struct wl_surface*, struct wl_array*) {},
+    .leave = [](void*, struct wl_keyboard*, uint32_t, struct wl_surface*) {},
+    .key = keyboard_handle_key,
+    .modifiers = [](void*, struct wl_keyboard*, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t) {},
+    .repeat_info = [](void*, struct wl_keyboard*, int32_t, int32_t) {},
 };
 
 std::expected<void, SigilError> Sigil::init_wayland() {
+    std::cout << "Sigil: init_wayland start" << std::endl;
     display_ = wl_display_connect(nullptr);
     if (!display_) {
         std::println(stderr, "Sigil: Failed to connect to Wayland display.");
         return std::unexpected(SigilError::WaylandInitFailed);
     }
+    std::cout << "Sigil: Wayland display connected" << std::endl;
 
     registry_ = wl_display_get_registry(display_);
     wl_registry_add_listener(registry_, &registry_listener, this);
+    std::cout << "Sigil: Roundtrip start" << std::endl;
     wl_display_roundtrip(display_);
+    std::cout << "Sigil: Roundtrip end" << std::endl;
 
     if (!compositor_ || !xdg_wm_base_) {
         std::println(stderr, "Sigil: Failed to bind required Wayland globals.");
         return std::unexpected(SigilError::WaylandInitFailed);
     }
+    std::cout << "Sigil: Globals bound" << std::endl;
 
     wl_surface_ = wl_compositor_create_surface(compositor_);
     if (!wl_surface_) return std::unexpected(SigilError::SurfaceCreationFailed);
+    std::cout << "Sigil: Surface created" << std::endl;
 
     xdg_surface_ = xdg_wm_base_get_xdg_surface(xdg_wm_base_, wl_surface_);
     xdg_surface_add_listener(xdg_surface_, &xdg_surface_listener, this);
@@ -139,10 +176,27 @@ std::expected<void, SigilError> Sigil::init_wayland() {
     xdg_toplevel_set_title(xdg_toplevel_, "Kaelum");
     xdg_toplevel_set_app_id(xdg_toplevel_, "org.veridian.kaelum");
 
+    if (seat_) {
+        keyboard_ = wl_seat_get_keyboard(seat_);
+        wl_keyboard_add_listener(keyboard_, &keyboard_listener, this);
+        std::println("Sigil: Keyboard listener attached.");
+    }
+
     wl_surface_commit(wl_surface_);
+    wl_display_roundtrip(display_);
 
     std::println("Sigil: Wayland surface created and mapped.");
     return {};
+}
+
+void Sigil::set_keyboard_callback(std::function<void(uint32_t key, bool pressed)> callback) {
+    keyboard_callback_ = callback;
+}
+
+void Sigil::handle_key_event(uint32_t key, bool pressed) {
+    if (keyboard_callback_) {
+        keyboard_callback_(key, pressed);
+    }
 }
 
 void Sigil::poll_events() {
@@ -169,8 +223,10 @@ std::expected<void, SigilError> Sigil::init_vulkan() {
     create_info.ppEnabledExtensionNames = extensions.data();
 
     if (vkCreateInstance(&create_info, nullptr, &instance_) != VK_SUCCESS) {
+        std::println(stderr, "Sigil: Failed to create Vulkan instance.");
         return std::unexpected(SigilError::VulkanInitFailed);
     }
+
 
     uint32_t device_count = 0;
     vkEnumeratePhysicalDevices(instance_, &device_count, nullptr);
@@ -245,14 +301,28 @@ std::expected<void, SigilError> Sigil::init_level_zero() {
 std::expected<void, SigilError> Sigil::create_swapchain() {
     VkSurfaceCapabilitiesKHR capabilities{};
     vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physical_device_, vk_surface_, &capabilities);
+    
+    std::println("Sigil: Capabilities extent: {}x{}", capabilities.currentExtent.width, capabilities.currentExtent.height);
+    if (capabilities.currentExtent.width == 0 || capabilities.currentExtent.height == 0) {
+        std::println(stderr, "Sigil: Invalid capabilities extent.");
+        return std::unexpected(SigilError::AllocationFailed);
+    }
  
     uint32_t format_count;
     vkGetPhysicalDeviceSurfaceFormatsKHR(physical_device_, vk_surface_, &format_count, nullptr);
+    if (format_count == 0) {
+        std::println(stderr, "Sigil: No surface formats available.");
+        return std::unexpected(SigilError::AllocationFailed);
+    }
     std::vector<VkSurfaceFormatKHR> formats(format_count);
     vkGetPhysicalDeviceSurfaceFormatsKHR(physical_device_, vk_surface_, &format_count, formats.data());
  
     uint32_t present_mode_count;
     vkGetPhysicalDeviceSurfacePresentModesKHR(physical_device_, vk_surface_, &present_mode_count, nullptr);
+    if (present_mode_count == 0) {
+        std::println(stderr, "Sigil: No present modes available.");
+        return std::unexpected(SigilError::AllocationFailed);
+    }
     std::vector<VkPresentModeKHR> present_modes(present_mode_count);
     vkGetPhysicalDeviceSurfacePresentModesKHR(physical_device_, vk_surface_, &present_mode_count, present_modes.data());
  
@@ -274,6 +344,13 @@ std::expected<void, SigilError> Sigil::create_swapchain() {
         }
     }
  
+    VkExtent2D actualExtent = capabilities.currentExtent;
+    if (actualExtent.width == UINT32_MAX) {
+        actualExtent = {800, 600};
+        actualExtent.width = std::clamp(actualExtent.width, capabilities.minImageExtent.width, capabilities.maxImageExtent.width);
+        actualExtent.height = std::clamp(actualExtent.height, capabilities.minImageExtent.height, capabilities.maxImageExtent.height);
+    }
+ 
     VkSwapchainCreateInfoKHR create_info{};
     create_info.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
     create_info.surface = vk_surface_;
@@ -283,12 +360,12 @@ std::expected<void, SigilError> Sigil::create_swapchain() {
     }
     create_info.imageFormat = surface_format.format;
     create_info.imageColorSpace = surface_format.colorSpace;
-    create_info.imageExtent = extent_ = capabilities.currentExtent;
+    create_info.imageExtent = extent_ = actualExtent;
     create_info.imageArrayLayers = 1;
     create_info.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
     create_info.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
     create_info.preTransform = capabilities.currentTransform;
-    create_info.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+    create_info.compositeAlpha = VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR;
     create_info.presentMode = present_mode;
     create_info.clipped = VK_TRUE;
  
@@ -402,20 +479,27 @@ static VkShaderModule create_shader_module(VkDevice device, const std::string& f
 }
 
 void Sigil::create_graphics_pipeline() {
-    VkShaderModule vertShaderModule = create_shader_module(device_, "shaders/test.vert");
-    VkShaderModule fragShaderModule = create_shader_module(device_, "shaders/test.frag");
- 
+    std::cout << "Sigil: Loading shaders" << std::endl;
+    VkShaderModule vertShaderModule = create_shader_module(device_, "shaders/test.vert.spv");
+    VkShaderModule fragShaderModule = create_shader_module(device_, "shaders/test.frag.spv");
+    
+    if (vertShaderModule == VK_NULL_HANDLE || fragShaderModule == VK_NULL_HANDLE) {
+        std::println(stderr, "Sigil: Failed to load one or more shaders");
+        return;
+    }
+    std::cout << "Sigil: Shaders loaded" << std::endl;
+    
     VkPipelineShaderStageCreateInfo stages[2] = {};
     stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
     stages[0].module = vertShaderModule;
     stages[0].pName = "main";
- 
+    
     stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
     stages[1].module = fragShaderModule;
     stages[1].pName = "main";
- 
+    
     VkVertexInputBindingDescription binding_desc{};
     binding_desc.binding = 0;
     binding_desc.stride = sizeof(SigilVertex);
@@ -443,30 +527,30 @@ void Sigil::create_graphics_pipeline() {
     vertexInputInfo.pVertexBindingDescriptions = &binding_desc;
     vertexInputInfo.vertexAttributeDescriptionCount = 3;
     vertexInputInfo.pVertexAttributeDescriptions = attr_desc;
- 
+    
     VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
     inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
     inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
- 
+    
     VkViewport viewport{};
     viewport.x = 0.0f;
     viewport.y = 0.0f;
-    viewport.width = 800.0f; 
-    viewport.height = 600.0f; 
+    viewport.width = (float)extent_.width; 
+    viewport.height = (float)extent_.height; 
     viewport.minDepth = 0.0f;
     viewport.maxDepth = 1.0f;
- 
+    
     VkRect2D scissor{};
     scissor.offset = {0, 0};
-    scissor.extent = {800, 600};
- 
+    scissor.extent = extent_;
+    
     VkPipelineViewportStateCreateInfo viewportState{};
     viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
     viewportState.viewportCount = 1;
     viewportState.pViewports = &viewport;
     viewportState.scissorCount = 1;
     viewportState.pScissors = &scissor;
- 
+    
     VkPipelineRasterizationStateCreateInfo rasterizer{};
     rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
     rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
@@ -474,12 +558,12 @@ void Sigil::create_graphics_pipeline() {
     rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
     rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
     rasterizer.depthClampEnable = VK_FALSE;
- 
+    
     VkPipelineMultisampleStateCreateInfo multisampling{};
     multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
     multisampling.sampleShadingEnable = VK_FALSE;
     multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
- 
+    
     VkPipelineColorBlendAttachmentState colorBlendAttachment{};
     colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
     colorBlendAttachment.blendEnable = VK_TRUE;
@@ -489,13 +573,13 @@ void Sigil::create_graphics_pipeline() {
     colorBlendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
     colorBlendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
     colorBlendAttachment.alphaBlendOp = VK_BLEND_OP_ADD;
- 
+    
     VkPipelineColorBlendStateCreateInfo colorBlending{};
     colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
     colorBlending.logicOpEnable = VK_FALSE;
     colorBlending.attachmentCount = 1;
     colorBlending.pAttachments = &colorBlendAttachment;
- 
+    
     VkDescriptorSetLayoutBinding layout_binding{};
     layout_binding.binding = 0;
     layout_binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -507,18 +591,29 @@ void Sigil::create_graphics_pipeline() {
     layout_info.bindingCount = 1;
     layout_info.pBindings = &layout_binding;
 
-    VkDescriptorSetLayout descriptor_set_layout;
-    vkCreateDescriptorSetLayout(device_, &layout_info, nullptr, &descriptor_set_layout);
+    VkDescriptorSetLayout descriptor_set_layout = VK_NULL_HANDLE;
+    if (vkCreateDescriptorSetLayout(device_, &layout_info, nullptr, &descriptor_set_layout) != VK_SUCCESS) {
+        std::println(stderr, "Sigil: Failed to create descriptor set layout");
+        return;
+    }
 
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     pipelineLayoutInfo.setLayoutCount = 1;
     pipelineLayoutInfo.pSetLayouts = &descriptor_set_layout;
- 
+    
     if (vkCreatePipelineLayout(device_, &pipelineLayoutInfo, nullptr, &pipeline_layout_) != VK_SUCCESS) {
         std::println(stderr, "Sigil: Failed to create pipeline layout");
+        vkDestroyDescriptorSetLayout(device_, descriptor_set_layout, nullptr);
+        return;
     }
- 
+    
+    VkPipelineDynamicStateCreateInfo dynamicState{};
+    dynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dynamicState.dynamicStateCount = 2;
+    VkDynamicState dynamicStates[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+    dynamicState.pDynamicStates = dynamicStates;
+    
     VkGraphicsPipelineCreateInfo pipelineInfo{};
     pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
     pipelineInfo.stageCount = 2;
@@ -529,18 +624,22 @@ void Sigil::create_graphics_pipeline() {
     pipelineInfo.pRasterizationState = &rasterizer;
     pipelineInfo.pMultisampleState = &multisampling;
     pipelineInfo.pColorBlendState = &colorBlending;
+    pipelineInfo.pDynamicState = &dynamicState;
     pipelineInfo.layout = pipeline_layout_;
     pipelineInfo.renderPass = render_pass_;
     pipelineInfo.subpass = 0;
- 
+    
+    std::cout << "Sigil: Calling vkCreateGraphicsPipelines" << std::endl;
     if (vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &graphics_pipeline_) != VK_SUCCESS) {
         std::println(stderr, "Sigil: Failed to create graphics pipeline");
     }
- 
+    std::cout << "Sigil: Graphics pipeline created" << std::endl;
+    
     vkDestroyShaderModule(device_, vertShaderModule, nullptr);
     vkDestroyShaderModule(device_, fragShaderModule, nullptr);
     vkDestroyDescriptorSetLayout(device_, descriptor_set_layout, nullptr);
 }
+
 
 
 void Sigil::cleanup_swapchain() {
@@ -595,32 +694,70 @@ void Sigil::render(const Nexus& nexus) {
     const auto& grid = nexus.get_grid();
     std::vector<SigilVertex> vertices;
     
-    // Simplified coordinates: map grid cells to [-1, 1] NDC
-    float cell_w = 2.0f / k_default_cols;
-    float cell_h = 2.0f / k_default_rows;
-    float offset_x = -1.0f;
+    // Calculate aspect ratio to prevent glyph stretching
+    float window_aspect = (float)extent_.width / (float)extent_.height;
+    float grid_aspect = (float)k_default_cols / (float)k_default_rows;
+    
+    float scale_x = 1.0f;
+    float scale_y = 1.0f;
+    
+    if (window_aspect > grid_aspect) {
+        scale_x = grid_aspect / window_aspect;
+    } else {
+        scale_y = window_aspect / grid_aspect;
+    }
+
+    float cell_w = (2.0f * scale_x) / k_default_cols;
+    float cell_h = (2.0f * scale_y) / k_default_rows;
+    float offset_x = -1.0f * scale_x; // This is not quite right for centering
     float offset_y = 1.0f;
+    
+    // Center the grid
+    float start_x = -1.0f + (1.0f - scale_x); 
+    float start_y = 1.0f;
+    
+    // Wait, simpler: 
+    // X ranges from -1 to 1. Total width 2.
+    // If scale_x = 0.8, we want it to go from -0.4 to 0.4.
+    float x_min = -scale_x;
+    float x_max = scale_x;
+    float y_min = -scale_y;
+    float y_max = scale_y;
+    
+    // Let's just use NDC and scale the width/height.
+    float current_cell_w = (2.0f * scale_x) / k_default_cols;
+    float current_cell_h = (2.0f * scale_y) / k_default_rows;
+    float current_offset_x = -scale_x;
+    float current_offset_y = scale_y;
 
     for (uint32_t y = 0; y < k_default_rows; ++y) {
         for (uint32_t x = 0; x < k_default_cols; ++x) {
             const auto& cell = grid[y * k_default_cols + x];
             if (cell.codepoint == U' ') continue; // Skip empty cells for now
-
-            // We'll use a simple 1:1 mapping for now. In real impl, use GlyphEngine metrics.
-            float x0 = offset_x + x * cell_w;
-            float y0 = offset_y - (y + 1) * cell_h;
-            float x1 = x0 + cell_w;
-            float y1 = offset_y - y * cell_h;
-
+            
+            auto it = glyph_map_.find(cell.codepoint);
+            float u0 = 0, v0 = 0, u1 = 1, v1 = 1;
+            if (it != glyph_map_.end()) {
+                u0 = it->second.u0;
+                v0 = it->second.v0;
+                u1 = it->second.u1;
+                v1 = it->second.v1;
+            }
+            
+            float x0 = current_offset_x + x * current_cell_w;
+            float y0 = current_offset_y - (y + 1) * current_cell_h;
+            float x1 = x0 + current_cell_w;
+            float y1 = current_offset_y - y * current_cell_h;
+            
             // Triangle 1
-            vertices.push_back({{x0, y0}, {0, 1}, {cell.fg.r/255.0f, cell.fg.g/255.0f, cell.fg.b/255.0f, cell.fg.a/255.0f}});
-            vertices.push_back({{x1, y0}, {1, 1}, {cell.fg.r/255.0f, cell.fg.g/255.0f, cell.fg.b/255.0f, cell.fg.a/255.0f}});
-            vertices.push_back({{x0, y1}, {0, 0}, {cell.fg.r/255.0f, cell.fg.g/255.0f, cell.fg.b/255.0f, cell.fg.a/255.0f}});
-
+            vertices.push_back({{x0, y0}, {u0, v0}, {cell.fg.r/255.0f, cell.fg.g/255.0f, cell.fg.b/255.0f, cell.fg.a/255.0f}});
+            vertices.push_back({{x1, y0}, {u1, v0}, {cell.fg.r/255.0f, cell.fg.g/255.0f, cell.fg.b/255.0f, cell.fg.a/255.0f}});
+            vertices.push_back({{x0, y1}, {u0, v1}, {cell.fg.r/255.0f, cell.fg.g/255.0f, cell.fg.b/255.0f, cell.fg.a/255.0f}});
+            
             // Triangle 2
-            vertices.push_back({{x1, y0}, {1, 1}, {cell.fg.r/255.0f, cell.fg.g/255.0f, cell.fg.b/255.0f, cell.fg.a/255.0f}});
-            vertices.push_back({{x1, y1}, {1, 0}, {cell.fg.r/255.0f, cell.fg.g/255.0f, cell.fg.b/255.0f, cell.fg.a/255.0f}});
-            vertices.push_back({{x0, y1}, {0, 0}, {cell.fg.r/255.0f, cell.fg.g/255.0f, cell.fg.b/255.0f, cell.fg.a/255.0f}});
+            vertices.push_back({{x1, y0}, {u1, v0}, {cell.fg.r/255.0f, cell.fg.g/255.0f, cell.fg.b/255.0f, cell.fg.a/255.0f}});
+            vertices.push_back({{x1, y1}, {u1, v1}, {cell.fg.r/255.0f, cell.fg.g/255.0f, cell.fg.b/255.0f, cell.fg.a/255.0f}});
+            vertices.push_back({{x0, y1}, {u0, v1}, {cell.fg.r/255.0f, cell.fg.g/255.0f, cell.fg.b/255.0f, cell.fg.a/255.0f}});
         }
     }
 
@@ -647,7 +784,7 @@ void Sigil::render(const Nexus& nexus) {
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     vkBeginCommandBuffer(cb, &beginInfo);
 
-    VkClearValue clearColor = {{{0.05f, 0.05f, 0.07f, 1.0f}}};
+    VkClearValue clearColor = {{{5/255.0f, 2/255.0f, 0/255.0f, 0.85f}}};
     VkRenderPassBeginInfo renderPassInfo{};
     renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
     renderPassInfo.renderPass = render_pass_;
@@ -658,6 +795,19 @@ void Sigil::render(const Nexus& nexus) {
     renderPassInfo.pClearValues = &clearColor;
 
     vkCmdBeginRenderPass(cb, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+    
+    VkViewport viewport{};
+    viewport.x = 0.0f;
+    viewport.y = 0.0f;
+    viewport.width = (float)extent_.width;
+    viewport.height = (float)extent_.height;
+    vkCmdSetViewport(cb, 0, 1, &viewport);
+
+    VkRect2D scissor{};
+    scissor.offset = {0, 0};
+    scissor.extent = extent_;
+    vkCmdSetScissor(cb, 0, 1, &scissor);
+
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, graphics_pipeline_);
     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout_, 0, 1, &descriptor_set_, 0, nullptr);
     VkDeviceSize offsets[] = {0};
@@ -691,6 +841,7 @@ void Sigil::render(const Nexus& nexus) {
 }
 
 void Sigil::on_resize(uint32_t width, uint32_t height) {
+    if (device_ == VK_NULL_HANDLE) return;
     vkDeviceWaitIdle(device_);
     cleanup_swapchain();
     if (!create_swapchain()) {
@@ -735,7 +886,7 @@ void Sigil::record_command_buffers() {
         beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
         if (vkBeginCommandBuffer(command_buffers_[i], &beginInfo) != VK_SUCCESS) continue;
 
-        VkClearValue clearColor = {{{0.05f, 0.05f, 0.07f, 1.0f}}}; // Dark Nordic background
+        VkClearValue clearColor = {{{5/255.0f, 2/255.0f, 0/255.0f, 0.85f}}}; // Nord background
 
         VkRenderPassBeginInfo renderPassInfo{};
         renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -754,6 +905,7 @@ void Sigil::record_command_buffers() {
 }
 
 void Sigil::create_glyph_atlas(GlyphEngine& engine) {
+    std::cout << "Sigil: Creating glyph atlas..." << std::endl;
     uint32_t atlas_width = 1024;
     uint32_t atlas_height = 1024;
     
@@ -781,9 +933,10 @@ void Sigil::create_glyph_atlas(GlyphEngine& engine) {
     VkMemoryAllocateInfo alloc_info{};
     alloc_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
     alloc_info.allocationSize = mem_reqs.size;
-    alloc_info.memoryTypeIndex = 0; // Simplified
-
+    alloc_info.memoryTypeIndex = find_memory_type(mem_reqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    
     if (vkAllocateMemory(device_, &alloc_info, nullptr, &glyph_atlas_memory_) != VK_SUCCESS) {
+
         std::println(stderr, "Sigil: Failed to allocate glyph atlas memory");
         return;
     }
@@ -831,6 +984,7 @@ void Sigil::create_glyph_atlas(GlyphEngine& engine) {
 
     // For now, we'll just load ASCII 32-126
     for (char32_t c = 32; c < 127; ++c) {
+        std::cout << "Sigil: Packing glyph " << (int)c << std::endl;
         auto glyph_res = engine.get_glyph(c);
         if (!glyph_res) continue;
 
@@ -852,15 +1006,25 @@ void Sigil::create_glyph_atlas(GlyphEngine& engine) {
                         glyph.metric.width);
         }
 
+        glyph_map_[c] = {
+            (float)current_x / atlas_width,
+            (float)current_y / atlas_height,
+            (float)(current_x + glyph.metric.width) / atlas_width,
+            (float)(current_y + glyph.metric.height) / atlas_height
+        };
+
         current_x += glyph.metric.width;
         max_row_height = std::max(max_row_height, glyph.metric.height);
     }
 
     // Transfer atlas_data to GPU
+    std::cout << "Sigil: Uploading atlas to GPU..." << std::endl;
     VkBuffer staging_buffer;
     VkDeviceMemory staging_buffer_memory;
-
+    
+    std::cout << "Sigil: Creating staging buffer..." << std::endl;
     VkBufferCreateInfo buffer_info{};
+
     buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     buffer_info.size = atlas_data.size();
     buffer_info.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
@@ -870,16 +1034,20 @@ void Sigil::create_glyph_atlas(GlyphEngine& engine) {
         std::println(stderr, "Sigil: Failed to create staging buffer");
         return;
     }
-
+    std::cout << "Sigil: Staging buffer created" << std::endl;
     VkMemoryRequirements mem_reqs_buf;
+    std::cout << "Sigil: Getting buffer memory requirements..." << std::endl;
     vkGetBufferMemoryRequirements(device_, staging_buffer, &mem_reqs_buf);
-
+    std::cout << "Sigil: Buffer memory requirements: " << mem_reqs_buf.size << std::endl;
+    
     VkMemoryAllocateInfo alloc_info_buf{};
     alloc_info_buf.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
     alloc_info_buf.allocationSize = mem_reqs_buf.size;
-    alloc_info_buf.memoryTypeIndex = 0; // Simplified
-
+    alloc_info_buf.memoryTypeIndex = find_memory_type(mem_reqs_buf.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    
     if (vkAllocateMemory(device_, &alloc_info_buf, nullptr, &staging_buffer_memory) != VK_SUCCESS) {
+
+
         std::println(stderr, "Sigil: Failed to allocate staging buffer memory");
         return;
     }
@@ -962,6 +1130,19 @@ void Sigil::create_glyph_atlas(GlyphEngine& engine) {
 
 void Sigil::initialize_assets(GlyphEngine& engine) {
     create_glyph_atlas(engine);
+    create_descriptor_set();
+    std::cout << "Sigil: Assets and descriptors initialized" << std::endl;
+}
+
+uint32_t Sigil::find_memory_type(uint32_t typeFilter, VkMemoryPropertyFlags properties) {
+    VkPhysicalDeviceMemoryProperties memProperties;
+    vkGetPhysicalDeviceMemoryProperties(physical_device_, &memProperties);
+    for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
+        if ((typeFilter & (1 << i)) && (memProperties.memoryTypes[i].propertyFlags & properties) == properties) {
+            return i;
+        }
+    }
+    return 0;
 }
 
 void Sigil::create_vertex_buffer() {
@@ -982,9 +1163,10 @@ void Sigil::create_vertex_buffer() {
     VkMemoryAllocateInfo alloc_info{};
     alloc_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
     alloc_info.allocationSize = mem_reqs.size;
-    alloc_info.memoryTypeIndex = 0; // Simplified
-
+    alloc_info.memoryTypeIndex = find_memory_type(mem_reqs.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    
     if (vkAllocateMemory(device_, &alloc_info, nullptr, &vertex_buffer_memory_) != VK_SUCCESS) {
+
         std::println(stderr, "Sigil: Failed to allocate vertex buffer memory");
         return;
     }

@@ -3,6 +3,7 @@
 #include <expected>
 #include <memory>
 #include <vector>
+#include <functional>
 #include <wayland-client.h>
 #include <vulkan/vulkan.h>
 #include "common.hpp"
@@ -13,6 +14,10 @@ struct SigilVertex {
     float pos[2];
     float uv[2];
     float color[4];
+};
+
+struct GlyphRect {
+    float u0, v0, u1, v1;
 };
 
 // Wayland type aliases to avoid namespace collisions
@@ -42,6 +47,8 @@ namespace Kaelum {
         Sigil();
         ~Sigil();
 
+        void handle_key_event(uint32_t key, bool pressed);
+
         /**
          * @brief Initializes the GPU pipeline and Wayland surface.
          */
@@ -52,15 +59,29 @@ namespace Kaelum {
          */
         void initialize_assets(GlyphEngine& engine);
 
-        /**
-         * @brief Renders the current Nexus grid to the screen.
-         */
-        void render(const Nexus& nexus);
+    /**
+     * @brief Renders the current Nexus grid to the screen.
+     */
+    void render(const Nexus& nexus);
 
-        /**
-         * @brief Polls Wayland events and updates surface state.
-         */
-        void poll_events();
+    /**
+     * @brief Sets a callback for keyboard input events.
+     */
+    void set_keyboard_callback(std::function<void(uint32_t key, bool pressed)> callback);
+
+    /**
+     * @brief Polls Wayland events and updates surface state.
+     */
+    void poll_events();
+
+    void prepare_read() { wl_display_prepare_read(display_); }
+    void dispatch_pending() { wl_display_dispatch_pending(display_); }
+
+    /**
+     * @brief Returns the Wayland display file descriptor.
+     */
+    int get_display_fd() const { return wl_display_get_fd(display_); }
+
 
         /**
          * @brief Handles window resize events.
@@ -78,6 +99,8 @@ namespace Kaelum {
         XdgWmBase* xdg_wm_base_ = nullptr;
         XdgSurface* xdg_surface_ = nullptr;
         XdgToplevel* xdg_toplevel_ = nullptr;
+        struct wl_seat* seat_ = nullptr;
+        struct wl_keyboard* keyboard_ = nullptr;
 
         // Vulkan handles
         VkInstance instance_ = VK_NULL_HANDLE;
@@ -114,6 +137,7 @@ namespace Kaelum {
         VkDeviceMemory glyph_atlas_memory_ = VK_NULL_HANDLE;
         VkImageView glyph_atlas_view_ = VK_NULL_HANDLE;
         VkSampler glyph_atlas_sampler_ = VK_NULL_HANDLE;
+        std::map<char32_t, GlyphRect> glyph_map_;
 
         // Descriptor Sets
         VkDescriptorPool descriptor_pool_ = VK_NULL_HANDLE;
@@ -135,10 +159,15 @@ namespace Kaelum {
         void create_command_pool();
         void record_command_buffers();
         void cleanup_swapchain();
-
+        
+        uint32_t find_memory_type(uint32_t typeFilter, VkMemoryPropertyFlags properties);
+        
         void create_vertex_buffer();
+
         void create_descriptor_set();
         void create_glyph_atlas(GlyphEngine& engine);
+
+        std::function<void(uint32_t key, bool pressed)> keyboard_callback_ = nullptr;
     };
 } // namespace Kaelum
 

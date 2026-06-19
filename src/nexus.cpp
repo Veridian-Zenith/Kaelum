@@ -78,6 +78,18 @@ void Nexus::process_csi(uint8_t final_char) {
     if (has_param) params.push_back(current_param);
 
     switch (final_char) {
+        case 'A': // Cursor Up
+            move_cursor(0, -(params.empty() ? 1 : params[0]));
+            break;
+        case 'B': // Cursor Down
+            move_cursor(0, (params.empty() ? 1 : params[0]));
+            break;
+        case 'C': // Cursor Right
+            move_cursor((params.empty() ? 1 : params[0]), 0);
+            break;
+        case 'D': // Cursor Left
+            move_cursor(-(params.empty() ? 1 : params[0]), 0);
+            break;
         case 'H': // Cursor Position (CUP)
             {
                 int row = params.size() > 0 ? params[0] : 1;

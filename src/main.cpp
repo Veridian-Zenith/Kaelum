@@ -3,6 +3,8 @@
 #include <print>
 #include <thread>
 #include <chrono>
+#include <map>
+#include <poll.h>
 #include "loom.hpp"
 #include "nexus.hpp"
 #include "sigil.hpp"
@@ -25,66 +27,89 @@ int main() {
         std::println(stderr, "Failed to initialize Loom.");
         return 1;
     }
+    std::cout << "Main: Loom initialized" << std::endl;
 
     auto sigil_res = sigil.initialize();
     if (!sigil_res) {
-        std::println(stderr, "Warning: Sigil initialization failed (probably swapchain), but continuing to test assets.");
+        std::println(stderr, "Fatal: Sigil initialization failed.");
+        return 1;
     }
-
+    std::cout << "Main: Sigil initialized" << std::endl;
+    
+    std::cout << "Main: Initializing assets..." << std::endl;
     sigil.initialize_assets(glyphs);
+
     
-    if (!sigil_res) {
-        std::println("Asset test complete. Exiting due to Sigil initialization failure.");
-        return 1;
-    }
-    
-    if (!sigil_res) {
-        std::println("Asset test complete. Exiting due to Sigil initialization failure.");
-        return 1;
-    }
-    
-    if (!sigil_res) {
-        std::println("Asset test complete. Exiting due to Sigil initialization failure.");
-        return 1;
-    }
-    
-    if (!sigil_res) {
-        std::println("Asset test complete. Exiting due to Sigil initialization failure.");
-        return 1;
-    }
-    
-    if (!sigil_res) {
-        std::println("Asset test complete. Exiting due to Sigil initialization failure.");
-        return 1;
-    }
- 
+    // Map wayland keycodes to ASCII
+    std::map<uint32_t, char> key_map = {
+        {30, 'a'}, {48, 'b'}, {46, 'c'}, {32, 'd'}, {18, 'e'}, {33, 'f'}, {34, 'g'}, {35, 'h'}, 
+        {23, 'i'}, {36, 'j'}, {37, 'k'}, {38, 'l'}, {50, 'm'}, {49, 'n'}, {24, 'o'}, {25, 'p'}, 
+        {16, 'q'}, {19, 'r'}, {31, 's'}, {20, 't'}, {22, 'u'}, {47, 'v'}, {17, 'w'}, {45, 'x'}, 
+        {21, 'y'}, {44, 'z'}, {28, '\n'}, {57, ' '}
+    };
+
+    sigil.set_keyboard_callback([&loom, &key_map](uint32_t key, bool pressed) {
+        if (pressed && key_map.contains(key)) {
+            char c = key_map[key];
+            (void)loom.write({(uint8_t*)&c, 1});
+        }
+    });
+
     std::println("Kaelum Loom, Nexus, and Sigil initialized. PTY linked to fish shell.");
+
     std::println("Press Ctrl+C to exit. Processing output into grid...\n");
  
     std::vector<uint8_t> buffer(4096);
     
-    while (true) {
-        // 1. Poll Wayland Events
-        sigil.poll_events();
+    // Event-driven setup
+    int wayland_fd = sigil.get_display_fd();
+    auto wake_fd_res = loom.register_wake_fd();
+    if (!wake_fd_res) {
+        std::println(stderr, "Failed to register io_uring wake FD.");
+        return 1;
+    }
+    int wake_fd = *wake_fd_res;
 
-        // 2. Poll PTY Input
-        auto read_res = loom.poll_read(buffer);
-        if (read_res) {
-            size_t bytes = *read_res;
-            if (bytes > 0) {
-                // Feed the data into the Nexus emulator
-                auto process_res = nexus.process_input({buffer.data(), bytes});
-                if (!process_res) {
-                    std::println(stderr, "Nexus parsing error.");
+    std::vector<pollfd> poll_fds = {
+        { wayland_fd, POLLIN, 0 },
+        { wake_fd, POLLIN, 0 }
+    };
+
+    while (true) {
+        // 1. Prepare Wayland for reading
+        sigil.prepare_read();
+        
+        // Poll for events
+        int ret = poll(poll_fds.data(), poll_fds.size(), 1);
+        
+        if (ret < 0) {
+            std::println(stderr, "Poll error.");
+            break;
+        }
+
+        if (poll_fds[0].revents & POLLIN) {
+            // Read events from Wayland and dispatch them
+            // We use poll_events() which is basically dispatch
+            sigil.poll_events();
+        } else {
+            // Still dispatch pending events even if we didn't read new ones
+            sigil.dispatch_pending();
+        }
+
+        if (poll_fds[1].revents & POLLIN) {
+            auto read_res = loom.poll_read(buffer);
+            if (read_res) {
+                size_t bytes = *read_res;
+                if (bytes > 0) {
+                    auto process_res = nexus.process_input({buffer.data(), bytes});
+                    if (!process_res) {
+                        std::println(stderr, "Nexus parsing error.");
+                    }
                 }
             }
         }
         
-        // 3. Render the frame
         sigil.render(nexus);
-        
-        // High-refresh-rate pacing (approx 1ms sleep to prevent CPU pegging)
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
  
     return 0;
