@@ -63,6 +63,7 @@ namespace Kaelum {
         std::vector<uint8_t> sequence_buffer_;
 
         void move_cursor(int dx, int dy);
+        void scroll_up();
         void set_cell(char32_t cp, Color fg, Color bg, uint32_t attrs);
         void clear_screen();
     };

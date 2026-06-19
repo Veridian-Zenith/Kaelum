@@ -74,7 +74,9 @@ namespace Kaelum {
         bool initialized_ = false;
 
         static constexpr size_t k_ring_buffer_size = 4096;
+        static constexpr size_t k_write_buffer_size = 256;
         uint8_t read_buffer_[k_ring_buffer_size];
+        uint8_t write_buffer_[k_write_buffer_size];
     };
 
 } // namespace Kaelum

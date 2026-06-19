@@ -20,7 +20,10 @@ void Nexus::handle_ground(uint8_t c) {
         current_state_ = State::Escape;
     } else if (c == '\n') {
         cursor_y_++;
-        if (cursor_y_ >= rows_) cursor_y_ = rows_ - 1;
+        if (cursor_y_ >= rows_) {
+            scroll_up();
+            cursor_y_ = rows_ - 1;
+        }
         cursor_x_ = 0;
     } else if (c == '\r') {
         cursor_x_ = 0;
@@ -36,7 +39,10 @@ void Nexus::handle_ground(uint8_t c) {
         if (cursor_x_ >= cols_) {
             cursor_x_ = 0;
             cursor_y_++;
-            if (cursor_y_ >= rows_) cursor_y_ = rows_ - 1;
+            if (cursor_y_ >= rows_) {
+                scroll_up();
+                cursor_y_ = rows_ - 1;
+            }
         }
     }
 }
@@ -222,8 +228,15 @@ void Nexus::resize(size_t cols, size_t rows) {
 }
 
 void Nexus::move_cursor(int dx, int dy) {
-    cursor_x_ = std::clamp(static_cast<size_t>(cursor_x_ + dx), size_t(0), cols_ - 1);
-    cursor_y_ = std::clamp(static_cast<size_t>(cursor_y_ + dy), size_t(0), rows_ - 1);
+    int new_x = static_cast<int>(cursor_x_) + dx;
+    int new_y = static_cast<int>(cursor_y_) + dy;
+    cursor_x_ = static_cast<size_t>(std::clamp(new_x, 0, static_cast<int>(cols_) - 1));
+    cursor_y_ = static_cast<size_t>(std::clamp(new_y, 0, static_cast<int>(rows_) - 1));
+}
+
+void Nexus::scroll_up() {
+    std::copy(grid_.begin() + cols_, grid_.end(), grid_.begin());
+    std::fill(grid_.end() - cols_, grid_.end(), Cell{});
 }
 
 void Nexus::set_cell(char32_t cp, Color fg, Color bg, uint32_t attrs) {

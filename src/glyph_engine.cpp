@@ -73,8 +73,8 @@ std::expected<GlyphData, GlyphError> GlyphEngine::get_glyph(char32_t codepoint) 
     FT_GlyphSlot slot = face_->glyph;
     GlyphData data;
     data.metric = {
-        .bearing_x = static_cast<uint32_t>(slot->bitmap_left),
-        .bearing_y = static_cast<uint32_t>(slot->bitmap_top),
+        .bearing_x = static_cast<int32_t>(slot->bitmap_left),
+        .bearing_y = static_cast<int32_t>(slot->bitmap_top),
         .width = static_cast<uint32_t>(slot->bitmap.width),
         .height = static_cast<uint32_t>(slot->bitmap.rows),
         .advance = static_cast<uint32_t>(slot->advance.x >> 6)

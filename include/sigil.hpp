@@ -18,6 +18,9 @@ struct SigilVertex {
 
 struct GlyphRect {
     float u0, v0, u1, v1;
+    // Pixel-space metrics for positioning within a cell
+    int32_t bearing_x, bearing_y;
+    uint32_t width, height, advance;
 };
 
 // Wayland type aliases to avoid namespace collisions
@@ -129,6 +132,7 @@ namespace Kaelum {
         XdgToplevel* xdg_toplevel_ = nullptr;
         struct wl_seat* seat_ = nullptr;
         struct wl_keyboard* keyboard_ = nullptr;
+        struct wl_pointer* pointer_ = nullptr;
 
         // Vulkan handles
         VkInstance instance_ = VK_NULL_HANDLE;
@@ -168,6 +172,7 @@ namespace Kaelum {
         VkBuffer vertex_buffer_ = VK_NULL_HANDLE;
         VkDeviceMemory vertex_buffer_memory_ = VK_NULL_HANDLE;
         void* vertex_buffer_mapped_ = nullptr;
+        size_t vertex_buffer_capacity_ = 0;
 
         // Glyph Atlas
         VkImage glyph_atlas_image_ = VK_NULL_HANDLE;

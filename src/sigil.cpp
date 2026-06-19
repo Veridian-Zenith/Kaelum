@@ -55,6 +55,7 @@ Sigil::~Sigil() {
 
     // Wayland cleanup
     if (frame_callback_) wl_callback_destroy(frame_callback_);
+    if (pointer_) wl_pointer_destroy(pointer_);
     if (keyboard_) wl_keyboard_destroy(keyboard_);
     if (xdg_toplevel_) xdg_toplevel_destroy(xdg_toplevel_);
     if (xdg_surface_) xdg_surface_destroy(xdg_surface_);
@@ -111,7 +112,7 @@ void registry_handle_global(void* data, struct wl_registry* registry, uint32_t i
         xdg_wm_base_add_listener(sigil->xdg_wm_base_, &wm_base_listener, sigil);
         std::println("Sigil: Bound xdg_wm_base");
     } else if (iface == "wl_seat") {
-        sigil->seat_ = (struct wl_seat*)wl_registry_bind(registry, id, &wl_seat_interface, version);
+        sigil->seat_ = (struct wl_seat*)wl_registry_bind(registry, id, &wl_seat_interface, std::min(version, 5u));
         std::println("Sigil: Bound wl_seat");
     }
 }
@@ -159,6 +160,18 @@ static const struct xdg_toplevel_listener xdg_toplevel_listener = {
     .close = xdg_toplevel_handle_close,
     .configure_bounds = [](void*, struct xdg_toplevel*, int32_t, int32_t) {},
     .wm_capabilities = [](void*, struct xdg_toplevel*, struct wl_array*) {},
+};
+
+// Pointer listener — handles cursor enter/leave for proper Hyprland focus
+static const struct wl_pointer_listener pointer_listener_inst = {
+    .enter = [](void*, struct wl_pointer* pointer, uint32_t serial,
+               struct wl_surface*, wl_fixed_t, wl_fixed_t) {
+        wl_pointer_set_cursor(pointer, serial, nullptr, 0, 0);
+    },
+    .leave = [](void*, struct wl_pointer*, uint32_t, struct wl_surface*) {},
+    .motion = [](void*, struct wl_pointer*, uint32_t, wl_fixed_t, wl_fixed_t) {},
+    .button = [](void*, struct wl_pointer*, uint32_t, uint32_t, uint32_t, uint32_t) {},
+    .axis = [](void*, struct wl_pointer*, uint32_t, uint32_t, wl_fixed_t) {},
 };
 
 static void keyboard_handle_key(void* data, struct wl_keyboard* keyboard, uint32_t serial, uint32_t time, uint32_t key, uint32_t state) {
@@ -210,6 +223,11 @@ std::expected<void, SigilError> Sigil::init_wayland() {
     if (seat_) {
         keyboard_ = wl_seat_get_keyboard(seat_);
         wl_keyboard_add_listener(keyboard_, &keyboard_listener, this);
+
+        pointer_ = wl_seat_get_pointer(seat_);
+        if (pointer_) {
+            wl_pointer_add_listener(pointer_, &pointer_listener_inst, this);
+        }
         std::println("Sigil: Keyboard listener attached.");
     }
 
@@ -763,10 +781,11 @@ void Sigil::render(const Nexus& nexus) {
     size_t n_rows = nexus.rows();
     std::vector<SigilVertex> vertices;
 
-    float cell_w = 2.0f / n_cols;
-    float cell_h = 2.0f / n_rows;
-    float origin_x = -1.0f;
-    float origin_y = 1.0f;
+    // Convert pixel dimensions to NDC units
+    float px_to_ndc_x = 2.0f / extent_.width;
+    float px_to_ndc_y = 2.0f / extent_.height;
+    float cell_w_ndc = cell_width_ * px_to_ndc_x;
+    float cell_h_ndc = cell_height_ * px_to_ndc_y;
 
     for (uint32_t y = 0; y < n_rows; ++y) {
         for (uint32_t x = 0; x < n_cols; ++x) {
@@ -774,31 +793,36 @@ void Sigil::render(const Nexus& nexus) {
             if (cell.codepoint == U' ') continue;
 
             auto it = glyph_map_.find(cell.codepoint);
-            float u0 = 0, v0 = 0, u1 = 1, v1 = 1;
-            if (it != glyph_map_.end()) {
-                u0 = it->second.u0;
-                v0 = it->second.v0;
-                u1 = it->second.u1;
-                v1 = it->second.v1;
-            }
+            if (it == glyph_map_.end()) continue;
 
-            float x0 = origin_x + x * cell_w;
-            float y0 = origin_y - (y + 1) * cell_h;
-            float x1 = x0 + cell_w;
-            float y1 = origin_y - y * cell_h;
+            const auto& gr = it->second;
+
+            // Cell origin in NDC (top-left of cell)
+            float cell_x = -1.0f + x * cell_w_ndc;
+            float cell_y = 1.0f - y * cell_h_ndc;
+
+            // Position glyph within cell using bearing offsets
+            float glyph_x0 = cell_x + gr.bearing_x * px_to_ndc_x;
+            float glyph_y0 = cell_y - gr.bearing_y * px_to_ndc_y;
+            float glyph_x1 = glyph_x0 + gr.width * px_to_ndc_x;
+            float glyph_y1 = glyph_y0 + gr.height * px_to_ndc_y;
 
             float r = cell.fg.r / 255.0f, g = cell.fg.g / 255.0f;
             float b = cell.fg.b / 255.0f, a = cell.fg.a / 255.0f;
 
-            vertices.push_back({{x0, y0}, {u0, v0}, {r, g, b, a}});
-            vertices.push_back({{x1, y0}, {u1, v0}, {r, g, b, a}});
-            vertices.push_back({{x0, y1}, {u0, v1}, {r, g, b, a}});
-            vertices.push_back({{x1, y0}, {u1, v0}, {r, g, b, a}});
-            vertices.push_back({{x1, y1}, {u1, v1}, {r, g, b, a}});
-            vertices.push_back({{x0, y1}, {u0, v1}, {r, g, b, a}});
+            // Two triangles for the glyph quad (top-left origin, Y-down in NDC)
+            vertices.push_back({{glyph_x0, glyph_y1}, {gr.u0, gr.v1}, {r, g, b, a}});
+            vertices.push_back({{glyph_x1, glyph_y1}, {gr.u1, gr.v1}, {r, g, b, a}});
+            vertices.push_back({{glyph_x0, glyph_y0}, {gr.u0, gr.v0}, {r, g, b, a}});
+            vertices.push_back({{glyph_x1, glyph_y1}, {gr.u1, gr.v1}, {r, g, b, a}});
+            vertices.push_back({{glyph_x1, glyph_y0}, {gr.u1, gr.v0}, {r, g, b, a}});
+            vertices.push_back({{glyph_x0, glyph_y0}, {gr.u0, gr.v0}, {r, g, b, a}});
         }
     }
 
+    if (vertices.size() > vertex_buffer_capacity_) {
+        vertices.resize(vertex_buffer_capacity_);
+    }
     if (!vertices.empty()) {
         std::memcpy(vertex_buffer_mapped_, vertices.data(), vertices.size() * sizeof(SigilVertex));
     }
@@ -890,14 +914,14 @@ void Sigil::render(const Nexus& nexus) {
 
 void Sigil::handle_configure(uint32_t width, uint32_t height) {
     if (width > 0 && height > 0) {
-        configured_width_ = width;
-        configured_height_ = height;
+        if (width != configured_width_ || height != configured_height_) {
+            configured_width_ = width;
+            configured_height_ = height;
+            if (initial_configure_done_) {
+                needs_resize_ = true;
+            }
+        }
     }
-    if (initial_configure_done_) {
-        needs_resize_ = true;
-    }
-    std::println("Sigil: Configure {}x{} (stored: {}x{}, init_done: {})",
-                 width, height, configured_width_, configured_height_, initial_configure_done_);
 }
 
 void Sigil::process_pending_resize() {
@@ -1095,7 +1119,12 @@ void Sigil::create_glyph_atlas(GlyphEngine& engine) {
             (float)current_x / atlas_width,
             (float)current_y / atlas_height,
             (float)(current_x + glyph.metric.width) / atlas_width,
-            (float)(current_y + glyph.metric.height) / atlas_height
+            (float)(current_y + glyph.metric.height) / atlas_height,
+            static_cast<int32_t>(glyph.metric.bearing_x),
+            static_cast<int32_t>(glyph.metric.bearing_y),
+            glyph.metric.width,
+            glyph.metric.height,
+            glyph.metric.advance
         };
 
         current_x += glyph.metric.width;
@@ -1227,7 +1256,8 @@ uint32_t Sigil::find_memory_type(uint32_t typeFilter, VkMemoryPropertyFlags prop
 void Sigil::create_vertex_buffer() {
     VkBufferCreateInfo buffer_info{};
     buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    buffer_info.size = 10000 * 6 * sizeof(SigilVertex); // Max estimate for grid
+    vertex_buffer_capacity_ = 20000 * 6;
+    buffer_info.size = vertex_buffer_capacity_ * sizeof(SigilVertex);
     buffer_info.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
     buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 

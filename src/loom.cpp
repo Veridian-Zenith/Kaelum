@@ -113,10 +113,14 @@ std::expected<size_t, LoomError> Loom::poll_read(std::span<uint8_t> buffer) {
 }
 
 std::expected<void, LoomError> Loom::write(std::span<const uint8_t> data) {
+    if (data.empty()) return {};
+    size_t to_write = std::min(data.size(), k_write_buffer_size);
+    std::memcpy(write_buffer_, data.data(), to_write);
+
     struct io_uring_sqe *sqe = io_uring_get_sqe(&ring_);
     if (!sqe) return std::unexpected(LoomError::WriteFailed);
 
-    io_uring_prep_write(sqe, master_fd_, data.data(), data.size(), -1);
+    io_uring_prep_write(sqe, master_fd_, write_buffer_, to_write, -1);
     io_uring_sqe_set_data64(sqe, URING_TAG_WRITE);
     io_uring_submit(&ring_);
 
