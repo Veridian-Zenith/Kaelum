@@ -176,6 +176,8 @@ static const struct wl_pointer_listener pointer_listener_inst = {
     .axis_source = [](void*, struct wl_pointer*, uint32_t) {},
     .axis_stop = [](void*, struct wl_pointer*, uint32_t, uint32_t) {},
     .axis_discrete = [](void*, struct wl_pointer*, uint32_t, int32_t) {},
+    .axis_value120 = [](void*, struct wl_pointer*, uint32_t, int32_t) {},
+    .axis_relative_direction = [](void*, struct wl_pointer*, uint32_t, uint32_t) {},
 };
 
 static void keyboard_handle_key(void* data, struct wl_keyboard* keyboard, uint32_t serial, uint32_t time, uint32_t key, uint32_t state) {
@@ -786,6 +788,7 @@ void Sigil::render(const Nexus& nexus) {
     std::vector<SigilVertex> vertices;
 
     // Convert pixel dimensions to NDC units
+    // Vulkan NDC: X [-1,+1] left→right, Y [-1,+1] top→bottom
     float px_to_ndc_x = 2.0f / extent_.width;
     float px_to_ndc_y = 2.0f / extent_.height;
     float cell_w_ndc = cell_width_ * px_to_ndc_x;
@@ -794,41 +797,46 @@ void Sigil::render(const Nexus& nexus) {
     for (uint32_t y = 0; y < n_rows; ++y) {
         for (uint32_t x = 0; x < n_cols; ++x) {
             const auto& cell = grid[y * n_cols + x];
-            if (cell.codepoint == U' ') continue;
+            if (cell.codepoint == U' ' || cell.codepoint == 0) continue;
 
             auto it = glyph_map_.find(cell.codepoint);
             if (it == glyph_map_.end()) continue;
 
             const auto& gr = it->second;
 
-            // Cell origin in NDC (top-left of cell)
-            float cell_x = -1.0f + x * cell_w_ndc;
-            float cell_y = 1.0f - y * cell_h_ndc;
+            // Cell top-left in NDC (Y-down: row 0 at top = Y=-1)
+            float cell_left = -1.0f + x * cell_w_ndc;
+            float cell_top  = -1.0f + y * cell_h_ndc;
 
-            // Position glyph within cell using bearing offsets
-            float glyph_x0 = cell_x + gr.bearing_x * px_to_ndc_x;
-            float glyph_y0 = cell_y - gr.bearing_y * px_to_ndc_y;
+            // Baseline is near the bottom of the cell.
+            // bearing_y = distance from baseline to glyph top (positive = up)
+            // In Y-down NDC, "up" means subtracting from baseline Y
+            float baseline_y = cell_top + cell_h_ndc;  // bottom of cell = baseline
+            float glyph_x0 = cell_left + gr.bearing_x * px_to_ndc_x;
+            float glyph_y0 = baseline_y - gr.bearing_y * px_to_ndc_y;  // top of glyph
             float glyph_x1 = glyph_x0 + gr.width * px_to_ndc_x;
-            float glyph_y1 = glyph_y0 + gr.height * px_to_ndc_y;
+            float glyph_y1 = glyph_y0 + gr.height * px_to_ndc_y;  // bottom of glyph
 
             float r = cell.fg.r / 255.0f, g = cell.fg.g / 255.0f;
             float b = cell.fg.b / 255.0f, a = cell.fg.a / 255.0f;
 
-            // Two triangles for the glyph quad (top-left origin, Y-down in NDC)
-            vertices.push_back({{glyph_x0, glyph_y1}, {gr.u0, gr.v1}, {r, g, b, a}});
-            vertices.push_back({{glyph_x1, glyph_y1}, {gr.u1, gr.v1}, {r, g, b, a}});
+            // Two triangles: top-left, top-right, bottom-left; top-right, bottom-right, bottom-left
+            // UV: v0=top of glyph bitmap, v1=bottom
             vertices.push_back({{glyph_x0, glyph_y0}, {gr.u0, gr.v0}, {r, g, b, a}});
-            vertices.push_back({{glyph_x1, glyph_y1}, {gr.u1, gr.v1}, {r, g, b, a}});
             vertices.push_back({{glyph_x1, glyph_y0}, {gr.u1, gr.v0}, {r, g, b, a}});
-            vertices.push_back({{glyph_x0, glyph_y0}, {gr.u0, gr.v0}, {r, g, b, a}});
+            vertices.push_back({{glyph_x0, glyph_y1}, {gr.u0, gr.v1}, {r, g, b, a}});
+            vertices.push_back({{glyph_x1, glyph_y0}, {gr.u1, gr.v0}, {r, g, b, a}});
+            vertices.push_back({{glyph_x1, glyph_y1}, {gr.u1, gr.v1}, {r, g, b, a}});
+            vertices.push_back({{glyph_x0, glyph_y1}, {gr.u0, gr.v1}, {r, g, b, a}});
         }
     }
 
     if (vertices.size() > vertex_buffer_capacity_) {
         vertices.resize(vertex_buffer_capacity_);
     }
+    size_t vertex_count = vertices.size();
     if (!vertices.empty()) {
-        std::memcpy(vertex_buffer_mapped_, vertices.data(), vertices.size() * sizeof(SigilVertex));
+        std::memcpy(vertex_buffer_mapped_, vertices.data(), vertex_count * sizeof(SigilVertex));
     }
 
     // --- Submit Render Command ---
@@ -879,7 +887,7 @@ void Sigil::render(const Nexus& nexus) {
     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout_, 0, 1, &descriptor_set_, 0, nullptr);
     VkDeviceSize offsets[] = {0};
     vkCmdBindVertexBuffers(cb, 0, 1, &vertex_buffer_, offsets);
-    vkCmdDraw(cb, static_cast<uint32_t>(vertices.size()), 1, 0, 0);
+    vkCmdDraw(cb, static_cast<uint32_t>(vertex_count), 1, 0, 0);
     vkCmdEndRenderPass(cb);
     vkEndCommandBuffer(cb);
 
@@ -1285,7 +1293,7 @@ void Sigil::create_vertex_buffer() {
     }
 
     vkBindBufferMemory(device_, vertex_buffer_, vertex_buffer_memory_, 0);
-    vkMapMemory(device_, vertex_buffer_memory_, 0, 10000 * 6 * sizeof(SigilVertex), 0, &vertex_buffer_mapped_);
+    vkMapMemory(device_, vertex_buffer_memory_, 0, vertex_buffer_capacity_ * sizeof(SigilVertex), 0, &vertex_buffer_mapped_);
 }
 
 void Sigil::create_descriptor_set() {
