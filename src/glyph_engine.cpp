@@ -1,4 +1,7 @@
 #include "glyph_engine.hpp"
+=======
+#include <iostream>
+>>>>>>> f3a208535ac134d49e379d14c6e49e33196c5e79
 #include <print>
 #include <cstring>
 
@@ -50,44 +53,5 @@ std::expected<void, GlyphError> GlyphEngine::load_font(const std::string& font_f
 
     FT_Set_Pixel_Sizes(face_, 0, 14);
     line_height_ = static_cast<uint32_t>(face_->size->metrics.height >> 6);
+<<<<<<< HEAD
     cell_width_ = static_cast<uint32_t>(face_->size->metrics.max_advance >> 6);
-
-    std::println("GlyphEngine: Loaded font face: {}", reinterpret_cast<const char*>(face_->family_name));
-
-    FcPatternDestroy(pattern);
-    FcPatternDestroy(matched_pattern);
-
-    return {};
-}
-
-std::expected<GlyphData, GlyphError> GlyphEngine::get_glyph(char32_t codepoint) {
-    if (glyph_cache_.contains(codepoint)) {
-        return glyph_cache_[codepoint];
-    }
-
-    if (FT_Load_Char(face_, codepoint, FT_LOAD_RENDER)) {
-        std::println(stderr, "GlyphEngine: Failed to load glyph for codepoint {}", static_cast<uint32_t>(codepoint));
-        return std::unexpected(GlyphError::GlyphLoadFailed);
-    }
-
-    FT_GlyphSlot slot = face_->glyph;
-    GlyphData data;
-    data.metric = {
-        .bearing_x = static_cast<int32_t>(slot->bitmap_left),
-        .bearing_y = static_cast<int32_t>(slot->bitmap_top),
-        .width = static_cast<uint32_t>(slot->bitmap.width),
-        .height = static_cast<uint32_t>(slot->bitmap.rows),
-        .advance = static_cast<uint32_t>(slot->advance.x >> 6)
-    };
-
-    size_t buffer_size = slot->bitmap.width * slot->bitmap.rows;
-    data.bitmap.resize(buffer_size);
-    if (buffer_size > 0) {
-        std::memcpy(data.bitmap.data(), slot->bitmap.buffer, buffer_size);
-    }
-
-    glyph_cache_[codepoint] = data;
-    return data;
-}
-
-} // namespace Kaelum
