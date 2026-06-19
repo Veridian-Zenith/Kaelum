@@ -54,11 +54,9 @@ std::expected<void, LoomError> Loom::initialize() {
     }
     initialized_ = true;
 
-    // Set master_fd to non-blocking for safety
-
-    int flags = fcntl(master_fd_, F_GETFL, 0);
-    fcntl(master_fd_, F_SETFL, flags | O_NONBLOCK);
-
+    // io_uring handles blocking FDs natively — the kernel completes the
+    // read asynchronously when data arrives. O_NONBLOCK would cause
+    // immediate -EAGAIN completions instead of waiting for shell output.
     submit_read();
     return {};
 }
