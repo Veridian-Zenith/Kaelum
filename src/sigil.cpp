@@ -327,7 +327,7 @@ std::expected<void, SigilError> Sigil::init_level_zero() {
     return {};
 }
 
-std::expected<void, SigilError> Sigil::create_swapchain() {
+std::expected<void, SigilError> Sigil::create_swapchain(VkSwapchainKHR old_swapchain) {
     VkSurfaceCapabilitiesKHR capabilities{};
     vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physical_device_, vk_surface_, &capabilities);
     
@@ -410,6 +410,7 @@ std::expected<void, SigilError> Sigil::create_swapchain() {
     create_info.compositeAlpha = composite_alpha;
     create_info.presentMode = present_mode;
     create_info.clipped = VK_TRUE;
+    create_info.oldSwapchain = old_swapchain;
  
     VkResult sc_result = vkCreateSwapchainKHR(device_, &create_info, nullptr, &swapchain_);
     if (sc_result != VK_SUCCESS) {
@@ -883,14 +884,19 @@ void Sigil::on_resize(uint32_t width, uint32_t height) {
     }
     vkDeviceWaitIdle(device_);
     cleanup_swapchain();
-    if (swapchain_ != VK_NULL_HANDLE) {
-        vkDestroySwapchainKHR(device_, swapchain_, nullptr);
-        swapchain_ = VK_NULL_HANDLE;
-    }
-    if (!create_swapchain()) {
+
+    VkSwapchainKHR old_swapchain = swapchain_;
+    swapchain_ = VK_NULL_HANDLE;
+
+    if (!create_swapchain(old_swapchain)) {
         std::println(stderr, "Sigil: Failed to recreate swapchain during resize");
+        if (old_swapchain != VK_NULL_HANDLE)
+            vkDestroySwapchainKHR(device_, old_swapchain, nullptr);
         return;
     }
+    if (old_swapchain != VK_NULL_HANDLE)
+        vkDestroySwapchainKHR(device_, old_swapchain, nullptr);
+
     create_framebuffers();
     record_command_buffers();
 }

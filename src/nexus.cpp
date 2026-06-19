@@ -25,6 +25,10 @@ void Nexus::handle_ground(uint8_t c) {
         cursor_x_ = 0;
     } else if (c == '\t') {
         cursor_x_ = (cursor_x_ + 8) % k_default_cols;
+    } else if (c == '\b' || c == 0x7f) {
+        if (cursor_x_ > 0) cursor_x_--;
+    } else if (c < 0x20) {
+        // Ignore other control characters
     } else {
         set_cell(static_cast<char32_t>(c), vz_fg, vz_bg, 0);
         cursor_x_ = (cursor_x_ + 1) % k_default_cols;

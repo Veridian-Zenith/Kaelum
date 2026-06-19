@@ -57,12 +57,12 @@ namespace Kaelum {
         std::expected<int, LoomError> register_wake_fd();
 
     private:
+        void submit_read();
+
         int master_fd_ = -1;
         pid_t child_pid_ = -1;
         struct io_uring ring_;
         bool initialized_ = false;
-        
-        // Buffer for io_uring read requests
 
         static constexpr size_t k_ring_buffer_size = 4096;
         uint8_t read_buffer_[k_ring_buffer_size];

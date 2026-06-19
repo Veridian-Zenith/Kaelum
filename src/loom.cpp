@@ -7,6 +7,11 @@
 #include <algorithm>
 #include <sys/eventfd.h>
 
+namespace {
+    constexpr uint64_t URING_TAG_READ  = 1;
+    constexpr uint64_t URING_TAG_WRITE = 2;
+}
+
 namespace Kaelum {
 
 Loom::Loom() {
@@ -54,14 +59,16 @@ std::expected<void, LoomError> Loom::initialize() {
     int flags = fcntl(master_fd_, F_GETFL, 0);
     fcntl(master_fd_, F_SETFL, flags | O_NONBLOCK);
 
-    // Submit initial read request
-    struct io_uring_sqe *sqe = io_uring_get_sqe(&ring_);
-    if (!sqe) return std::unexpected(LoomError::ReadFailed);
-
-    io_uring_prep_read(sqe, master_fd_, read_buffer_, k_ring_buffer_size, 0);
-    io_uring_submit(&ring_);
-
+    submit_read();
     return {};
+}
+
+void Loom::submit_read() {
+    struct io_uring_sqe *sqe = io_uring_get_sqe(&ring_);
+    if (!sqe) return;
+    io_uring_prep_read(sqe, master_fd_, read_buffer_, k_ring_buffer_size, -1);
+    io_uring_sqe_set_data64(sqe, URING_TAG_READ);
+    io_uring_submit(&ring_);
 }
 
 std::expected<int, LoomError> Loom::register_wake_fd() {
@@ -78,53 +85,41 @@ std::expected<int, LoomError> Loom::register_wake_fd() {
 
 std::expected<size_t, LoomError> Loom::poll_read(std::span<uint8_t> buffer) {
     struct io_uring_cqe *cqe;
-    
-    // Non-blocking peek at the completion queue
-    if (io_uring_peek_cqe(&ring_, &cqe) == 0) {
+
+    unsigned head;
+    unsigned count = 0;
+    io_uring_for_each_cqe(&ring_, head, cqe) {
+        uint64_t tag = io_uring_cqe_get_data64(cqe);
         int res = cqe->res;
-        io_uring_cqe_seen(&ring_, cqe);
+        count++;
 
-        if (res < 0) {
-            return std::unexpected(LoomError::ReadFailed);
-        }
-
-        if (res > 0) {
+        if (tag == URING_TAG_READ) {
+            io_uring_cq_advance(&ring_, count);
+            if (res <= 0) {
+                submit_read();
+                return (res == 0) ? std::expected<size_t, LoomError>(0)
+                                  : std::unexpected(LoomError::ReadFailed);
+            }
             size_t bytes_to_copy = std::min(static_cast<size_t>(res), buffer.size());
             std::memcpy(buffer.data(), read_buffer_, bytes_to_copy);
-            
-            // Re-submit read request
-            struct io_uring_sqe *sqe = io_uring_get_sqe(&ring_);
-            if (sqe) {
-                io_uring_prep_read(sqe, master_fd_, read_buffer_, k_ring_buffer_size, 0);
-                io_uring_submit(&ring_);
-            }
-            
+            submit_read();
             return bytes_to_copy;
         }
+        // URING_TAG_WRITE completions are silently consumed
     }
+    if (count > 0) io_uring_cq_advance(&ring_, count);
 
-    return 0; // No data available
+    return 0;
 }
 
 std::expected<void, LoomError> Loom::write(std::span<const uint8_t> data) {
     struct io_uring_sqe *sqe = io_uring_get_sqe(&ring_);
     if (!sqe) return std::unexpected(LoomError::WriteFailed);
 
-    io_uring_prep_write(sqe, master_fd_, data.data(), data.size(), 0);
+    io_uring_prep_write(sqe, master_fd_, data.data(), data.size(), -1);
+    io_uring_sqe_set_data64(sqe, URING_TAG_WRITE);
     io_uring_submit(&ring_);
-    
-    // For writes in a terminal, we typically want to ensure they are sent
-    // We'll wait for this specific CQE to avoid overfilling the ring
-    struct io_uring_cqe *cqe;
-    if (io_uring_wait_cqe(&ring_, &cqe) < 0) {
-        return std::unexpected(LoomError::WriteFailed);
-    }
-    
-    int res = cqe->res;
-    io_uring_cqe_seen(&ring_, cqe);
-    
-    if (res < 0) return std::unexpected(LoomError::WriteFailed);
-    
+
     return {};
 }
 

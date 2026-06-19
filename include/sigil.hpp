@@ -170,7 +170,7 @@ namespace Kaelum {
         std::expected<void, SigilError> init_wayland();
         std::expected<void, SigilError> init_vulkan();
         std::expected<void, SigilError> init_level_zero();
-        std::expected<void, SigilError> create_swapchain();
+        std::expected<void, SigilError> create_swapchain(VkSwapchainKHR old_swapchain = VK_NULL_HANDLE);
         void create_framebuffers();
         void create_render_pass();
         void create_graphics_pipeline();
