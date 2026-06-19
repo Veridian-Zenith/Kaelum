@@ -6,6 +6,7 @@
 #include <memory>
 #include <span>
 #include <liburing.h>
+#include <sys/ioctl.h>
 #include "common.hpp"
 
 
@@ -55,6 +56,14 @@ namespace Kaelum {
          * @brief Registers a wake FD for io_uring completions.
          */
         std::expected<int, LoomError> register_wake_fd();
+
+        /**
+         * @brief Sets the PTY window size (TIOCSWINSZ).
+         */
+        void set_pty_size(uint16_t cols, uint16_t rows, uint16_t xpixel = 0, uint16_t ypixel = 0) {
+            struct winsize ws = {rows, cols, xpixel, ypixel};
+            if (master_fd_ >= 0) ioctl(master_fd_, TIOCSWINSZ, &ws);
+        }
 
     private:
         void submit_read();

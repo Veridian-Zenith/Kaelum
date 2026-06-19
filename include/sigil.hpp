@@ -70,6 +70,15 @@ namespace Kaelum {
     void set_keyboard_callback(std::function<void(uint32_t key, bool pressed)> callback);
 
     /**
+     * @brief Sets a callback for window resize events (cols, rows, width_px, height_px).
+     */
+    void set_resize_callback(std::function<void(uint32_t cols, uint32_t rows, uint32_t wpx, uint32_t hpx)> callback) {
+        resize_callback_ = std::move(callback);
+    }
+
+    void set_cell_size(uint32_t w, uint32_t h) { cell_width_ = w; cell_height_ = h; }
+
+    /**
      * @brief Polls Wayland events and updates surface state.
      */
     void poll_events();
@@ -161,6 +170,13 @@ namespace Kaelum {
         // Descriptor Sets
         VkDescriptorPool descriptor_pool_ = VK_NULL_HANDLE;
         VkDescriptorSet descriptor_set_ = VK_NULL_HANDLE;
+
+        // Cell dimensions for resize calculation
+        uint32_t cell_width_ = 8;
+        uint32_t cell_height_ = 14;
+
+        // Callbacks
+        std::function<void(uint32_t, uint32_t, uint32_t, uint32_t)> resize_callback_;
 
         // Intel Level Zero handles (opaque pointers)
         void* lz_driver_ = nullptr;

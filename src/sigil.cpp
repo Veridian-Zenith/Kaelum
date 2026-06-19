@@ -730,28 +730,18 @@ void Sigil::render(const Nexus& nexus) {
     vkResetFences(device_, 1, &in_flight_fence_);
 
     const auto& grid = nexus.get_grid();
+    size_t n_cols = nexus.cols();
+    size_t n_rows = nexus.rows();
     std::vector<SigilVertex> vertices;
 
-    float window_aspect = (float)extent_.width / (float)extent_.height;
-    float grid_aspect = (float)k_default_cols / (float)k_default_rows;
+    float cell_w = 2.0f / n_cols;
+    float cell_h = 2.0f / n_rows;
+    float origin_x = -1.0f;
+    float origin_y = 1.0f;
 
-    float scale_x = 1.0f;
-    float scale_y = 1.0f;
-
-    if (window_aspect > grid_aspect) {
-        scale_x = grid_aspect / window_aspect;
-    } else {
-        scale_y = window_aspect / grid_aspect;
-    }
-
-    float cell_w = (2.0f * scale_x) / k_default_cols;
-    float cell_h = (2.0f * scale_y) / k_default_rows;
-    float origin_x = -scale_x;
-    float origin_y = scale_y;
-
-    for (uint32_t y = 0; y < k_default_rows; ++y) {
-        for (uint32_t x = 0; x < k_default_cols; ++x) {
-            const auto& cell = grid[y * k_default_cols + x];
+    for (uint32_t y = 0; y < n_rows; ++y) {
+        for (uint32_t x = 0; x < n_cols; ++x) {
+            const auto& cell = grid[y * n_cols + x];
             if (cell.codepoint == U' ') continue;
 
             auto it = glyph_map_.find(cell.codepoint);
@@ -899,6 +889,13 @@ void Sigil::on_resize(uint32_t width, uint32_t height) {
 
     create_framebuffers();
     record_command_buffers();
+
+    if (resize_callback_ && cell_width_ > 0 && cell_height_ > 0) {
+        uint32_t cols = extent_.width / cell_width_;
+        uint32_t rows = extent_.height / cell_height_;
+        if (cols > 0 && rows > 0)
+            resize_callback_(cols, rows, extent_.width, extent_.height);
+    }
 }
 
 void Sigil::create_command_pool() {

@@ -50,6 +50,7 @@ std::expected<void, GlyphError> GlyphEngine::load_font(const std::string& font_f
 
     FT_Set_Pixel_Sizes(face_, 0, 14);
     line_height_ = static_cast<uint32_t>(face_->size->metrics.height >> 6);
+    cell_width_ = static_cast<uint32_t>(face_->size->metrics.max_advance >> 6);
 
     std::println("GlyphEngine: Loaded font face: {}", reinterpret_cast<const char*>(face_->family_name));
 

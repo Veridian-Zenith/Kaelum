@@ -4,7 +4,6 @@
 #include <vector>
 #include <span>
 #include <array>
-#include <variant>
 #include "common.hpp"
 
 namespace Kaelum {
@@ -33,7 +32,11 @@ namespace Kaelum {
 
         std::expected<void, NexusError> process_input(std::span<const uint8_t> data);
 
+        void resize(size_t cols, size_t rows);
+
         const Grid& get_grid() const { return grid_; }
+        size_t cols() const { return cols_; }
+        size_t rows() const { return rows_; }
         std::pair<size_t, size_t> get_cursor() const { return {cursor_x_, cursor_y_}; }
 
     private:
@@ -51,6 +54,8 @@ namespace Kaelum {
         void process_csi(uint8_t final_char);
         void parse_sgr(std::span<const uint8_t> params);
 
+        size_t cols_ = k_default_cols;
+        size_t rows_ = k_default_rows;
         Grid grid_;
         size_t cursor_x_ = 0;
         size_t cursor_y_ = 0;

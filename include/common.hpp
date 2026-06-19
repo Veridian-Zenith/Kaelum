@@ -2,7 +2,7 @@
 
 #include <cstdint>
 #include <string_view>
-#include <array>
+#include <vector>
 
 namespace Kaelum {
 
@@ -41,6 +41,6 @@ namespace Kaelum {
     /**
      * @brief Grid of cells representing the terminal state
      */
-    using Grid = std::array<Cell, k_default_cols * k_default_rows>;
+    using Grid = std::vector<Cell>;
 
 } // namespace Kaelum

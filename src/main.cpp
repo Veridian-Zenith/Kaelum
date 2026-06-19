@@ -34,7 +34,22 @@ int main() {
 
     sigil.initialize_assets(glyphs);
 
-    
+    // Set cell dimensions for resize calculation
+    uint32_t cw = glyphs.get_cell_width();
+    uint32_t ch = glyphs.get_line_height();
+    if (cw == 0) cw = 8;
+    if (ch == 0) ch = 14;
+    sigil.set_cell_size(cw, ch);
+
+    sigil.set_resize_callback([&nexus, &loom](uint32_t cols, uint32_t rows, uint32_t wpx, uint32_t hpx) {
+        nexus.resize(cols, rows);
+        loom.set_pty_size(static_cast<uint16_t>(cols), static_cast<uint16_t>(rows),
+                          static_cast<uint16_t>(wpx), static_cast<uint16_t>(hpx));
+    });
+
+    // Set initial PTY size
+    loom.set_pty_size(static_cast<uint16_t>(k_default_cols), static_cast<uint16_t>(k_default_rows));
+
     // Map Linux input scancodes to ASCII
     std::map<uint32_t, char> key_map = {
         // Letters
@@ -51,9 +66,25 @@ int main() {
         {28, '\n'}, {57, ' '}, {14, '\b'}, {15, '\t'}, {1, '\x1b'},
     };
 
-    sigil.set_keyboard_callback([&loom, &key_map](uint32_t key, bool pressed) {
+    // Arrow keys and special keys → escape sequences
+    std::map<uint32_t, std::string> special_key_map = {
+        {103, "\x1b[A"}, // Up
+        {108, "\x1b[B"}, // Down
+        {106, "\x1b[C"}, // Right
+        {105, "\x1b[D"}, // Left
+        {102, "\x1b[H"}, // Home
+        {107, "\x1b[F"}, // End
+        {104, "\x1b[5~"}, // Page Up
+        {109, "\x1b[6~"}, // Page Down
+        {111, "\x1b[3~"}, // Delete
+    };
+
+    sigil.set_keyboard_callback([&loom, &key_map, &special_key_map](uint32_t key, bool pressed) {
         if (!pressed) return;
-        if (key_map.contains(key)) {
+        if (special_key_map.contains(key)) {
+            const auto& seq = special_key_map[key];
+            (void)loom.write({(const uint8_t*)seq.data(), seq.size()});
+        } else if (key_map.contains(key)) {
             char c = key_map[key];
             (void)loom.write({(uint8_t*)&c, 1});
         }
