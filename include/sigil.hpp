@@ -90,6 +90,11 @@ namespace Kaelum {
          */
         void on_resize(uint32_t width, uint32_t height);
 
+        /**
+         * @brief Called from xdg_toplevel configure to store dimensions.
+         */
+        void handle_configure(uint32_t width, uint32_t height);
+
 
     private:
         friend void registry_handle_global(void* data, struct wl_registry* registry, uint32_t id, const char* interface, uint32_t version);
@@ -112,6 +117,9 @@ namespace Kaelum {
         VkSurfaceKHR vk_surface_ = VK_NULL_HANDLE;
         VkSwapchainKHR swapchain_ = VK_NULL_HANDLE;
         VkExtent2D extent_ = {0, 0};
+        uint32_t configured_width_ = 800;
+        uint32_t configured_height_ = 600;
+        bool initial_configure_done_ = false;
         std::vector<VkImage> swapchain_images_;
         std::vector<VkImageView> swapchain_image_views_;
         std::vector<VkFramebuffer> swapchain_framebuffers_;

@@ -87,6 +87,7 @@ std::expected<void, SigilError> Sigil::initialize() {
     auto l_res = init_level_zero();
     if (!l_res) return std::unexpected(l_res.error());
 
+    initial_configure_done_ = true;
     std::println("Sigil: Full hardware pipeline initialized successfully.");
     return {};
 }
@@ -128,9 +129,8 @@ static void xdg_toplevel_handle_configure(void* data, struct xdg_toplevel* xdg_t
     (void)xdg_toplevel;
     (void)states;
     Sigil* sigil = static_cast<Sigil*>(data);
-    if (width > 0 && height > 0) {
-        sigil->on_resize(static_cast<uint32_t>(width), static_cast<uint32_t>(height));
-    }
+    sigil->handle_configure(width > 0 ? static_cast<uint32_t>(width) : 0,
+                            height > 0 ? static_cast<uint32_t>(height) : 0);
 }
 
 static const struct xdg_toplevel_listener xdg_toplevel_listener = {
@@ -328,9 +328,7 @@ std::expected<void, SigilError> Sigil::create_swapchain() {
     VkSurfaceCapabilitiesKHR capabilities{};
     vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physical_device_, vk_surface_, &capabilities);
     
-    std::println("Sigil: Capabilities extent: {}x{}", capabilities.currentExtent.width, capabilities.currentExtent.height);
     if (capabilities.currentExtent.width == 0 || capabilities.currentExtent.height == 0) {
-        std::println(stderr, "Sigil: Invalid capabilities extent.");
         return std::unexpected(SigilError::AllocationFailed);
     }
  
@@ -373,9 +371,12 @@ std::expected<void, SigilError> Sigil::create_swapchain() {
  
     VkExtent2D actualExtent = capabilities.currentExtent;
     if (actualExtent.width == UINT32_MAX) {
-        actualExtent = {800, 600};
-        actualExtent.width = std::clamp(actualExtent.width, capabilities.minImageExtent.width, capabilities.maxImageExtent.width);
-        actualExtent.height = std::clamp(actualExtent.height, capabilities.minImageExtent.height, capabilities.maxImageExtent.height);
+        actualExtent.width = std::clamp(configured_width_, capabilities.minImageExtent.width, capabilities.maxImageExtent.width);
+        actualExtent.height = std::clamp(configured_height_, capabilities.minImageExtent.height, capabilities.maxImageExtent.height);
+    }
+
+    if (actualExtent.width == 0 || actualExtent.height == 0) {
+        return std::unexpected(SigilError::AllocationFailed);
     }
  
     VkSwapchainCreateInfoKHR create_info{};
@@ -392,7 +393,18 @@ std::expected<void, SigilError> Sigil::create_swapchain() {
     create_info.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
     create_info.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
     create_info.preTransform = capabilities.currentTransform;
-    create_info.compositeAlpha = VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR;
+
+    VkCompositeAlphaFlagBitsKHR composite_alpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+    for (auto flag : {VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+                      VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR,
+                      VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR,
+                      VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR}) {
+        if (capabilities.supportedCompositeAlpha & flag) {
+            composite_alpha = flag;
+            break;
+        }
+    }
+    create_info.compositeAlpha = composite_alpha;
     create_info.presentMode = present_mode;
     create_info.clipped = VK_TRUE;
  
@@ -841,10 +853,22 @@ void Sigil::render(const Nexus& nexus) {
     }
 }
 
+void Sigil::handle_configure(uint32_t width, uint32_t height) {
+    if (width > 0 && height > 0) {
+        configured_width_ = width;
+        configured_height_ = height;
+    }
+    if (initial_configure_done_) {
+        on_resize(configured_width_, configured_height_);
+    }
+}
+
 void Sigil::on_resize(uint32_t width, uint32_t height) {
-    (void)width;
-    (void)height;
     if (device_ == VK_NULL_HANDLE) return;
+    if (width > 0 && height > 0) {
+        configured_width_ = width;
+        configured_height_ = height;
+    }
     vkDeviceWaitIdle(device_);
     cleanup_swapchain();
     if (!create_swapchain()) {
