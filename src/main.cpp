@@ -3,6 +3,7 @@
 #include <map>
 #include <poll.h>
 #include <unistd.h>
+#include <cerrno>
 #include "loom.hpp"
 #include "nexus.hpp"
 #include "sigil.hpp"
@@ -106,18 +107,13 @@ int main() {
  
     std::vector<uint8_t> buffer(4096);
     
-    // Event-driven setup
     int wayland_fd = sigil.get_display_fd();
-    auto wake_fd_res = loom.register_wake_fd();
-    if (!wake_fd_res) {
-        std::println(stderr, "Failed to register io_uring wake FD.");
-        return 1;
-    }
-    int wake_fd = *wake_fd_res;
+    int pty_fd = loom.master_fd();
 
+    // Poll on Wayland display FD + PTY master FD directly
     std::vector<pollfd> poll_fds = {
         { wayland_fd, POLLIN, 0 },
-        { wake_fd, POLLIN, 0 }
+        { pty_fd, POLLIN, 0 }
     };
 
     while (!sigil.should_close()) {
@@ -131,9 +127,13 @@ int main() {
             continue;
         }
 
-        int ret = poll(poll_fds.data(), poll_fds.size(), 1);
+        int ret = poll(poll_fds.data(), poll_fds.size(), 16);
 
         if (ret < 0) {
+            if (errno == EINTR) {
+                sigil.cancel_read();
+                continue;
+            }
             sigil.cancel_read();
             std::println(stderr, "Poll error.");
             break;
@@ -145,21 +145,20 @@ int main() {
             sigil.cancel_read();
         }
 
+        // Read PTY output directly — standard read() + poll is what
+        // Ghostty, Kitty, and every production terminal uses
         if (poll_fds[1].revents & POLLIN) {
-            // Consume the eventfd to prevent busy-loop
-            uint64_t wake_val;
-            [[maybe_unused]] auto r = ::read(wake_fd, &wake_val, sizeof(wake_val));
-
-            auto read_res = loom.poll_read(buffer);
-            if (read_res) {
-                size_t bytes = *read_res;
-                if (bytes > 0) {
-                    auto process_res = nexus.process_input({buffer.data(), bytes});
-                    if (!process_res) {
-                        std::println(stderr, "Nexus parsing error.");
-                    }
+            ssize_t n = ::read(pty_fd, buffer.data(), buffer.size());
+            if (n > 0) {
+                auto process_res = nexus.process_input({buffer.data(), static_cast<size_t>(n)});
+                if (!process_res) {
+                    std::println(stderr, "Nexus parsing error.");
                 }
+            } else if (n == 0) {
+                // Shell exited
+                break;
             }
+            // n < 0 && errno == EAGAIN: no data, continue
         }
 
         sigil.process_pending_resize();

@@ -6,6 +6,7 @@
 #include <cstring>
 #include <algorithm>
 #include <sys/eventfd.h>
+#include <fcntl.h>
 
 namespace {
     constexpr uint64_t URING_TAG_READ  = 1;
@@ -54,10 +55,11 @@ std::expected<void, LoomError> Loom::initialize() {
     }
     initialized_ = true;
 
-    // io_uring handles blocking FDs natively — the kernel completes the
-    // read asynchronously when data arrives. O_NONBLOCK would cause
-    // immediate -EAGAIN completions instead of waiting for shell output.
-    submit_read();
+    // Set non-blocking for poll()+read() pattern in main loop.
+    // PTY reads now happen via direct read() instead of io_uring.
+    int flags = fcntl(master_fd_, F_GETFL, 0);
+    fcntl(master_fd_, F_SETFL, flags | O_NONBLOCK);
+
     return {};
 }
 

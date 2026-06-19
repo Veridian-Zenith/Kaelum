@@ -835,7 +835,7 @@ void Sigil::render(const Nexus& nexus) {
         vertices.resize(vertex_buffer_capacity_);
     }
     size_t vertex_count = vertices.size();
-    if (render_diag_count_ < 5) {
+    if (render_diag_count_ < 10) {
         size_t non_space = 0;
         for (size_t i = 0; i < n_rows * n_cols; ++i) {
             if (grid[i].codepoint != U' ' && grid[i].codepoint != 0) ++non_space;
