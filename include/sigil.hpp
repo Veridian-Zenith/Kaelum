@@ -75,6 +75,7 @@ namespace Kaelum {
     void poll_events();
 
     void prepare_read() { wl_display_prepare_read(display_); }
+    void cancel_read() { wl_display_cancel_read(display_); }
     void dispatch_pending() { wl_display_dispatch_pending(display_); }
 
     /**
@@ -116,6 +117,9 @@ namespace Kaelum {
         VkRenderPass render_pass_ = VK_NULL_HANDLE;
         VkPipeline graphics_pipeline_ = VK_NULL_HANDLE;
         VkPipelineLayout pipeline_layout_ = VK_NULL_HANDLE;
+        VkDescriptorSetLayout descriptor_set_layout_ = VK_NULL_HANDLE;
+        VkFormat swapchain_format_ = VK_FORMAT_B8G8R8A8_SRGB;
+        uint32_t graphics_queue_family_ = 0;
 
         // Command buffers
         VkCommandPool command_pool_ = VK_NULL_HANDLE;

@@ -1,5 +1,4 @@
 #include "nexus.hpp"
-#include <iostream>
 #include <algorithm>
 #include <charconv>
 
@@ -26,7 +25,7 @@ void Nexus::handle_ground(uint8_t c) {
     } else if (c == '\t') {
         cursor_x_ = (cursor_x_ + 8) % k_default_cols;
     } else {
-        set_cell(static_cast<char32_t>(c), {255, 255, 255, 255}, {0, 0, 0, 255}, 0);
+        set_cell(static_cast<char32_t>(c), vz_fg, vz_bg, 0);
         cursor_x_ = (cursor_x_ + 1) % k_default_cols;
         if (cursor_x_ == 0) {
             cursor_y_ = (cursor_y_ + 1) % k_default_rows;

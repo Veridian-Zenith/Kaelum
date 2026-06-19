@@ -20,5 +20,8 @@ Thumbs.db
 *.dll
 *.exe
 
+# Compiled shaders (generated from GLSL sources)
+shaders/*.spv
+
 # Logs
 *.log

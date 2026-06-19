@@ -1,10 +1,8 @@
-#include <iostream>
 #include <vector>
 #include <print>
-#include <thread>
-#include <chrono>
 #include <map>
 #include <poll.h>
+#include <unistd.h>
 #include "loom.hpp"
 #include "nexus.hpp"
 #include "sigil.hpp"
@@ -27,16 +25,13 @@ int main() {
         std::println(stderr, "Failed to initialize Loom.");
         return 1;
     }
-    std::cout << "Main: Loom initialized" << std::endl;
 
     auto sigil_res = sigil.initialize();
     if (!sigil_res) {
         std::println(stderr, "Fatal: Sigil initialization failed.");
         return 1;
     }
-    std::cout << "Main: Sigil initialized" << std::endl;
-    
-    std::cout << "Main: Initializing assets..." << std::endl;
+
     sigil.initialize_assets(glyphs);
 
     
@@ -88,15 +83,17 @@ int main() {
         }
 
         if (poll_fds[0].revents & POLLIN) {
-            // Read events from Wayland and dispatch them
-            // We use poll_events() which is basically dispatch
             sigil.poll_events();
         } else {
-            // Still dispatch pending events even if we didn't read new ones
+            sigil.cancel_read();
             sigil.dispatch_pending();
         }
 
         if (poll_fds[1].revents & POLLIN) {
+            // Consume the eventfd to prevent busy-loop
+            uint64_t wake_val;
+            [[maybe_unused]] auto r = ::read(wake_fd, &wake_val, sizeof(wake_val));
+
             auto read_res = loom.poll_read(buffer);
             if (read_res) {
                 size_t bytes = *read_res;

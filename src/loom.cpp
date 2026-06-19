@@ -2,7 +2,7 @@
 #include <pty.h>
 #include <unistd.h>
 #include <termios.h>
-#include <iostream>
+#include <cstdlib>
 #include <cstring>
 #include <algorithm>
 #include <sys/eventfd.h>
@@ -34,9 +34,12 @@ std::expected<void, LoomError> Loom::initialize() {
     }
 
     if (child_pid_ == 0) {
-        // Child: Execute Fish Shell
-        execl("/usr/bin/fish", "fish", nullptr);
-        // If execl fails
+        // Child: Execute the user's preferred shell, with Fish as first preference
+        const char* shell = std::getenv("SHELL");
+        if (!shell || shell[0] == '\0') shell = "/usr/bin/fish";
+        execl(shell, shell, nullptr);
+        // If execl fails, try /bin/sh as last resort
+        execl("/bin/sh", "sh", nullptr);
         std::exit(1);
     }
 

@@ -3,7 +3,6 @@
 #include <vulkan/vulkan.h>
 #include <vulkan/vulkan_wayland.h>
 #include <wayland-client.h>
-#include <iostream>
 #include <print>
 #include <vector>
 #include <algorithm>
@@ -21,13 +20,31 @@ namespace Kaelum {
 Sigil::Sigil() = default;
 
 Sigil::~Sigil() {
+    if (device_ != VK_NULL_HANDLE) vkDeviceWaitIdle(device_);
+
     if (swapchain_ != VK_NULL_HANDLE) {
         cleanup_swapchain();
         vkDestroySwapchainKHR(device_, swapchain_, nullptr);
     }
+
+    // Glyph atlas resources
+    if (glyph_atlas_sampler_ != VK_NULL_HANDLE) vkDestroySampler(device_, glyph_atlas_sampler_, nullptr);
+    if (glyph_atlas_view_ != VK_NULL_HANDLE) vkDestroyImageView(device_, glyph_atlas_view_, nullptr);
+    if (glyph_atlas_image_ != VK_NULL_HANDLE) vkDestroyImage(device_, glyph_atlas_image_, nullptr);
+    if (glyph_atlas_memory_ != VK_NULL_HANDLE) vkFreeMemory(device_, glyph_atlas_memory_, nullptr);
+
+    // Vertex buffer resources
+    if (vertex_buffer_mapped_) vkUnmapMemory(device_, vertex_buffer_memory_);
+    if (vertex_buffer_ != VK_NULL_HANDLE) vkDestroyBuffer(device_, vertex_buffer_, nullptr);
+    if (vertex_buffer_memory_ != VK_NULL_HANDLE) vkFreeMemory(device_, vertex_buffer_memory_, nullptr);
+
+    // Descriptor resources
+    if (descriptor_pool_ != VK_NULL_HANDLE) vkDestroyDescriptorPool(device_, descriptor_pool_, nullptr);
+    if (descriptor_set_layout_ != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device_, descriptor_set_layout_, nullptr);
+
     if (command_pool_ != VK_NULL_HANDLE) vkDestroyCommandPool(device_, command_pool_, nullptr);
-    if (pipeline_layout_ != VK_NULL_HANDLE) vkDestroyPipelineLayout(device_, pipeline_layout_, nullptr);
     if (graphics_pipeline_ != VK_NULL_HANDLE) vkDestroyPipeline(device_, graphics_pipeline_, nullptr);
+    if (pipeline_layout_ != VK_NULL_HANDLE) vkDestroyPipelineLayout(device_, pipeline_layout_, nullptr);
     if (render_pass_ != VK_NULL_HANDLE) vkDestroyRenderPass(device_, render_pass_, nullptr);
     if (image_available_semaphore_ != VK_NULL_HANDLE) vkDestroySemaphore(device_, image_available_semaphore_, nullptr);
     if (render_finished_semaphore_ != VK_NULL_HANDLE) vkDestroySemaphore(device_, render_finished_semaphore_, nullptr);
@@ -35,9 +52,16 @@ Sigil::~Sigil() {
     if (device_ != VK_NULL_HANDLE) vkDestroyDevice(device_, nullptr);
     if (vk_surface_ != VK_NULL_HANDLE) vkDestroySurfaceKHR(instance_, vk_surface_, nullptr);
     if (instance_ != VK_NULL_HANDLE) vkDestroyInstance(instance_, nullptr);
-    
+
+    // Wayland cleanup
+    if (keyboard_) wl_keyboard_destroy(keyboard_);
+    if (xdg_toplevel_) xdg_toplevel_destroy(xdg_toplevel_);
+    if (xdg_surface_) xdg_surface_destroy(xdg_surface_);
+    if (xdg_wm_base_) xdg_wm_base_destroy(xdg_wm_base_);
     if (wl_surface_) wl_surface_destroy(wl_surface_);
+    if (seat_) wl_seat_destroy(seat_);
     if (compositor_) wl_compositor_destroy(compositor_);
+    if (registry_) wl_registry_destroy(registry_);
     if (display_) wl_display_disconnect(display_);
 }
 
@@ -47,30 +71,21 @@ std::expected<void, SigilError> Sigil::initialize() {
     if (!w_res) return std::unexpected(w_res.error());
 
     auto v_res = init_vulkan();
-    std::cout << "Sigil: Vulkan init finished" << std::endl;
     if (!v_res) return std::unexpected(v_res.error());
 
     auto s_res = create_swapchain();
-    std::cout << "Sigil: Swapchain created" << std::endl;
     if (!s_res) return std::unexpected(s_res.error());
+
     create_render_pass();
-    std::cout << "Sigil: Render pass created" << std::endl;
     create_framebuffers();
-    std::cout << "Sigil: Framebuffers created" << std::endl;
-    create_graphics_pipeline();
-    std::cout << "Sigil: Pipeline created" << std::endl;
     create_sync_objects();
-    std::cout << "Sigil: Sync objects created" << std::endl;
     create_command_pool();
-    std::cout << "Sigil: Command pool created" << std::endl;
+    create_graphics_pipeline();
     record_command_buffers();
-    std::cout << "Sigil: Command buffers recorded" << std::endl;
     create_vertex_buffer();
-    std::cout << "Sigil: Vertex buffer created" << std::endl;
-    
+
     auto l_res = init_level_zero();
     if (!l_res) return std::unexpected(l_res.error());
-
 
     std::println("Sigil: Full hardware pipeline initialized successfully.");
     return {};
@@ -143,29 +158,23 @@ static const struct wl_keyboard_listener keyboard_listener = {
 };
 
 std::expected<void, SigilError> Sigil::init_wayland() {
-    std::cout << "Sigil: init_wayland start" << std::endl;
     display_ = wl_display_connect(nullptr);
     if (!display_) {
         std::println(stderr, "Sigil: Failed to connect to Wayland display.");
         return std::unexpected(SigilError::WaylandInitFailed);
     }
-    std::cout << "Sigil: Wayland display connected" << std::endl;
 
     registry_ = wl_display_get_registry(display_);
     wl_registry_add_listener(registry_, &registry_listener, this);
-    std::cout << "Sigil: Roundtrip start" << std::endl;
     wl_display_roundtrip(display_);
-    std::cout << "Sigil: Roundtrip end" << std::endl;
 
     if (!compositor_ || !xdg_wm_base_) {
         std::println(stderr, "Sigil: Failed to bind required Wayland globals.");
         return std::unexpected(SigilError::WaylandInitFailed);
     }
-    std::cout << "Sigil: Globals bound" << std::endl;
 
     wl_surface_ = wl_compositor_create_surface(compositor_);
     if (!wl_surface_) return std::unexpected(SigilError::SurfaceCreationFailed);
-    std::cout << "Sigil: Surface created" << std::endl;
 
     xdg_surface_ = xdg_wm_base_get_xdg_surface(xdg_wm_base_, wl_surface_);
     xdg_surface_add_listener(xdg_surface_, &xdg_surface_listener, this);
@@ -200,9 +209,8 @@ void Sigil::handle_key_event(uint32_t key, bool pressed) {
 }
 
 void Sigil::poll_events() {
-    while (wl_display_dispatch(display_) != 0) {
-        // Keep dispatching until the event queue is empty
-    }
+    wl_display_read_events(display_);
+    wl_display_dispatch_pending(display_);
 }
 
 std::expected<void, SigilError> Sigil::init_vulkan() {
@@ -236,7 +244,6 @@ std::expected<void, SigilError> Sigil::init_vulkan() {
     vkEnumeratePhysicalDevices(instance_, &device_count, devices.data());
     physical_device_ = devices[0];
 
-    // Create Wayland Surface
     VkWaylandSurfaceCreateInfoKHR surface_create_info{};
     surface_create_info.sType = VK_STRUCTURE_TYPE_WAYLAND_SURFACE_CREATE_INFO_KHR;
     surface_create_info.display = display_;
@@ -246,19 +253,38 @@ std::expected<void, SigilError> Sigil::init_vulkan() {
         return std::unexpected(SigilError::VulkanInitFailed);
     }
 
+    // Find a queue family that supports both graphics and presentation
+    uint32_t queue_family_count = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties(physical_device_, &queue_family_count, nullptr);
+    std::vector<VkQueueFamilyProperties> queue_families(queue_family_count);
+    vkGetPhysicalDeviceQueueFamilyProperties(physical_device_, &queue_family_count, queue_families.data());
+
+    graphics_queue_family_ = UINT32_MAX;
+    for (uint32_t i = 0; i < queue_family_count; ++i) {
+        VkBool32 present_support = VK_FALSE;
+        vkGetPhysicalDeviceSurfaceSupportKHR(physical_device_, i, vk_surface_, &present_support);
+        if ((queue_families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) && present_support) {
+            graphics_queue_family_ = i;
+            break;
+        }
+    }
+    if (graphics_queue_family_ == UINT32_MAX) {
+        std::println(stderr, "Sigil: No queue family supports both graphics and presentation.");
+        return std::unexpected(SigilError::VulkanInitFailed);
+    }
+
     float queue_priority = 1.0f;
     VkDeviceQueueCreateInfo queue_create_info{};
     queue_create_info.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-    queue_create_info.queueFamilyIndex = 0; // Simplified
+    queue_create_info.queueFamilyIndex = graphics_queue_family_;
     queue_create_info.queueCount = 1;
     queue_create_info.pQueuePriorities = &queue_priority;
- 
+
     VkDeviceCreateInfo device_create_info{};
     device_create_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
     device_create_info.queueCreateInfoCount = 1;
     device_create_info.pQueueCreateInfos = &queue_create_info;
 
-    // Enable swapchain extension for the device
     std::vector<const char*> device_extensions = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
     device_create_info.enabledExtensionCount = static_cast<uint32_t>(device_extensions.size());
     device_create_info.ppEnabledExtensionNames = device_extensions.data();
@@ -267,7 +293,7 @@ std::expected<void, SigilError> Sigil::init_vulkan() {
         return std::unexpected(SigilError::VulkanInitFailed);
     }
 
-    vkGetDeviceQueue(device_, 0, 0, &graphics_queue_);
+    vkGetDeviceQueue(device_, graphics_queue_family_, 0, &graphics_queue_);
 
     return {};
 }
@@ -334,6 +360,7 @@ std::expected<void, SigilError> Sigil::create_swapchain() {
             break;
         }
     }
+    swapchain_format_ = surface_format.format;
  
     // Choose present mode (prefer Mailbox for low latency, fall back to FIFO)
     VkPresentModeKHR present_mode = VK_PRESENT_MODE_FIFO_KHR;
@@ -396,7 +423,6 @@ std::expected<void, SigilError> Sigil::create_swapchain() {
             std::println(stderr, "Sigil: Failed to create image view for swapchain image {}", i);
         }
     }
-    std::println("Sigil: Swapchain created with {} images.", image_count);
     return {};
 }
 
@@ -423,7 +449,7 @@ void Sigil::create_framebuffers() {
 void Sigil::create_render_pass() {
 
     VkAttachmentDescription color_attachment{};
-    color_attachment.format = VK_FORMAT_B8G8R8A8_SRGB;
+    color_attachment.format = swapchain_format_;
     color_attachment.samples = VK_SAMPLE_COUNT_1_BIT;
     color_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     color_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
@@ -479,15 +505,13 @@ static VkShaderModule create_shader_module(VkDevice device, const std::string& f
 }
 
 void Sigil::create_graphics_pipeline() {
-    std::cout << "Sigil: Loading shaders" << std::endl;
     VkShaderModule vertShaderModule = create_shader_module(device_, "shaders/test.vert.spv");
     VkShaderModule fragShaderModule = create_shader_module(device_, "shaders/test.frag.spv");
-    
+
     if (vertShaderModule == VK_NULL_HANDLE || fragShaderModule == VK_NULL_HANDLE) {
         std::println(stderr, "Sigil: Failed to load one or more shaders");
         return;
     }
-    std::cout << "Sigil: Shaders loaded" << std::endl;
     
     VkPipelineShaderStageCreateInfo stages[2] = {};
     stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -591,8 +615,7 @@ void Sigil::create_graphics_pipeline() {
     layout_info.bindingCount = 1;
     layout_info.pBindings = &layout_binding;
 
-    VkDescriptorSetLayout descriptor_set_layout = VK_NULL_HANDLE;
-    if (vkCreateDescriptorSetLayout(device_, &layout_info, nullptr, &descriptor_set_layout) != VK_SUCCESS) {
+    if (vkCreateDescriptorSetLayout(device_, &layout_info, nullptr, &descriptor_set_layout_) != VK_SUCCESS) {
         std::println(stderr, "Sigil: Failed to create descriptor set layout");
         return;
     }
@@ -600,11 +623,10 @@ void Sigil::create_graphics_pipeline() {
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     pipelineLayoutInfo.setLayoutCount = 1;
-    pipelineLayoutInfo.pSetLayouts = &descriptor_set_layout;
-    
+    pipelineLayoutInfo.pSetLayouts = &descriptor_set_layout_;
+
     if (vkCreatePipelineLayout(device_, &pipelineLayoutInfo, nullptr, &pipeline_layout_) != VK_SUCCESS) {
         std::println(stderr, "Sigil: Failed to create pipeline layout");
-        vkDestroyDescriptorSetLayout(device_, descriptor_set_layout, nullptr);
         return;
     }
     
@@ -629,15 +651,12 @@ void Sigil::create_graphics_pipeline() {
     pipelineInfo.renderPass = render_pass_;
     pipelineInfo.subpass = 0;
     
-    std::cout << "Sigil: Calling vkCreateGraphicsPipelines" << std::endl;
     if (vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &graphics_pipeline_) != VK_SUCCESS) {
         std::println(stderr, "Sigil: Failed to create graphics pipeline");
     }
-    std::cout << "Sigil: Graphics pipeline created" << std::endl;
-    
+
     vkDestroyShaderModule(device_, vertShaderModule, nullptr);
     vkDestroyShaderModule(device_, fragShaderModule, nullptr);
-    vkDestroyDescriptorSetLayout(device_, descriptor_set_layout, nullptr);
 }
 
 
@@ -690,17 +709,15 @@ void Sigil::render(const Nexus& nexus) {
         return;
     }
 
-    // --- Update Vertex Buffer from Nexus Grid ---
     const auto& grid = nexus.get_grid();
     std::vector<SigilVertex> vertices;
-    
-    // Calculate aspect ratio to prevent glyph stretching
+
     float window_aspect = (float)extent_.width / (float)extent_.height;
     float grid_aspect = (float)k_default_cols / (float)k_default_rows;
-    
+
     float scale_x = 1.0f;
     float scale_y = 1.0f;
-    
+
     if (window_aspect > grid_aspect) {
         scale_x = grid_aspect / window_aspect;
     } else {
@@ -709,32 +726,14 @@ void Sigil::render(const Nexus& nexus) {
 
     float cell_w = (2.0f * scale_x) / k_default_cols;
     float cell_h = (2.0f * scale_y) / k_default_rows;
-    float offset_x = -1.0f * scale_x; // This is not quite right for centering
-    float offset_y = 1.0f;
-    
-    // Center the grid
-    float start_x = -1.0f + (1.0f - scale_x); 
-    float start_y = 1.0f;
-    
-    // Wait, simpler: 
-    // X ranges from -1 to 1. Total width 2.
-    // If scale_x = 0.8, we want it to go from -0.4 to 0.4.
-    float x_min = -scale_x;
-    float x_max = scale_x;
-    float y_min = -scale_y;
-    float y_max = scale_y;
-    
-    // Let's just use NDC and scale the width/height.
-    float current_cell_w = (2.0f * scale_x) / k_default_cols;
-    float current_cell_h = (2.0f * scale_y) / k_default_rows;
-    float current_offset_x = -scale_x;
-    float current_offset_y = scale_y;
+    float origin_x = -scale_x;
+    float origin_y = scale_y;
 
     for (uint32_t y = 0; y < k_default_rows; ++y) {
         for (uint32_t x = 0; x < k_default_cols; ++x) {
             const auto& cell = grid[y * k_default_cols + x];
-            if (cell.codepoint == U' ') continue; // Skip empty cells for now
-            
+            if (cell.codepoint == U' ') continue;
+
             auto it = glyph_map_.find(cell.codepoint);
             float u0 = 0, v0 = 0, u1 = 1, v1 = 1;
             if (it != glyph_map_.end()) {
@@ -743,21 +742,21 @@ void Sigil::render(const Nexus& nexus) {
                 u1 = it->second.u1;
                 v1 = it->second.v1;
             }
-            
-            float x0 = current_offset_x + x * current_cell_w;
-            float y0 = current_offset_y - (y + 1) * current_cell_h;
-            float x1 = x0 + current_cell_w;
-            float y1 = current_offset_y - y * current_cell_h;
-            
-            // Triangle 1
-            vertices.push_back({{x0, y0}, {u0, v0}, {cell.fg.r/255.0f, cell.fg.g/255.0f, cell.fg.b/255.0f, cell.fg.a/255.0f}});
-            vertices.push_back({{x1, y0}, {u1, v0}, {cell.fg.r/255.0f, cell.fg.g/255.0f, cell.fg.b/255.0f, cell.fg.a/255.0f}});
-            vertices.push_back({{x0, y1}, {u0, v1}, {cell.fg.r/255.0f, cell.fg.g/255.0f, cell.fg.b/255.0f, cell.fg.a/255.0f}});
-            
-            // Triangle 2
-            vertices.push_back({{x1, y0}, {u1, v0}, {cell.fg.r/255.0f, cell.fg.g/255.0f, cell.fg.b/255.0f, cell.fg.a/255.0f}});
-            vertices.push_back({{x1, y1}, {u1, v1}, {cell.fg.r/255.0f, cell.fg.g/255.0f, cell.fg.b/255.0f, cell.fg.a/255.0f}});
-            vertices.push_back({{x0, y1}, {u0, v1}, {cell.fg.r/255.0f, cell.fg.g/255.0f, cell.fg.b/255.0f, cell.fg.a/255.0f}});
+
+            float x0 = origin_x + x * cell_w;
+            float y0 = origin_y - (y + 1) * cell_h;
+            float x1 = x0 + cell_w;
+            float y1 = origin_y - y * cell_h;
+
+            float r = cell.fg.r / 255.0f, g = cell.fg.g / 255.0f;
+            float b = cell.fg.b / 255.0f, a = cell.fg.a / 255.0f;
+
+            vertices.push_back({{x0, y0}, {u0, v0}, {r, g, b, a}});
+            vertices.push_back({{x1, y0}, {u1, v0}, {r, g, b, a}});
+            vertices.push_back({{x0, y1}, {u0, v1}, {r, g, b, a}});
+            vertices.push_back({{x1, y0}, {u1, v0}, {r, g, b, a}});
+            vertices.push_back({{x1, y1}, {u1, v1}, {r, g, b, a}});
+            vertices.push_back({{x0, y1}, {u0, v1}, {r, g, b, a}});
         }
     }
 
@@ -784,7 +783,8 @@ void Sigil::render(const Nexus& nexus) {
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     vkBeginCommandBuffer(cb, &beginInfo);
 
-    VkClearValue clearColor = {{{5/255.0f, 2/255.0f, 0/255.0f, 0.85f}}};
+    // Veridian Zenith: deep void background (#050200)
+    VkClearValue clearColor = {{{5.0f/255.0f, 2.0f/255.0f, 0.0f/255.0f, 1.0f}}};
     VkRenderPassBeginInfo renderPassInfo{};
     renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
     renderPassInfo.renderPass = render_pass_;
@@ -795,7 +795,7 @@ void Sigil::render(const Nexus& nexus) {
     renderPassInfo.pClearValues = &clearColor;
 
     vkCmdBeginRenderPass(cb, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
-    
+
     VkViewport viewport{};
     viewport.x = 0.0f;
     viewport.y = 0.0f;
@@ -841,6 +841,8 @@ void Sigil::render(const Nexus& nexus) {
 }
 
 void Sigil::on_resize(uint32_t width, uint32_t height) {
+    (void)width;
+    (void)height;
     if (device_ == VK_NULL_HANDLE) return;
     vkDeviceWaitIdle(device_);
     cleanup_swapchain();
@@ -850,16 +852,13 @@ void Sigil::on_resize(uint32_t width, uint32_t height) {
     }
     create_framebuffers();
     record_command_buffers();
-    
-    // In a real implementation, we'd also update viewport and scissor in the pipeline
-    std::println("Sigil: Swapchain and framebuffers recreated for size {}x{}", width, height);
 }
 
 void Sigil::create_command_pool() {
     VkCommandPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
     poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-    poolInfo.queueFamilyIndex = 0;
+    poolInfo.queueFamilyIndex = graphics_queue_family_;
 
     if (vkCreateCommandPool(device_, &poolInfo, nullptr, &command_pool_) != VK_SUCCESS) {
         std::println(stderr, "Sigil: Failed to create command pool");
@@ -886,7 +885,7 @@ void Sigil::record_command_buffers() {
         beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
         if (vkBeginCommandBuffer(command_buffers_[i], &beginInfo) != VK_SUCCESS) continue;
 
-        VkClearValue clearColor = {{{5/255.0f, 2/255.0f, 0/255.0f, 0.85f}}}; // Nord background
+        VkClearValue clearColor = {{{5.0f/255.0f, 2.0f/255.0f, 0.0f/255.0f, 1.0f}}};
 
         VkRenderPassBeginInfo renderPassInfo{};
         renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -905,7 +904,6 @@ void Sigil::record_command_buffers() {
 }
 
 void Sigil::create_glyph_atlas(GlyphEngine& engine) {
-    std::cout << "Sigil: Creating glyph atlas..." << std::endl;
     uint32_t atlas_width = 1024;
     uint32_t atlas_height = 1024;
     
@@ -976,15 +974,12 @@ void Sigil::create_glyph_atlas(GlyphEngine& engine) {
         return;
     }
 
-    // Now pack the glyphs
     std::vector<uint8_t> atlas_data(atlas_width * atlas_height, 0);
     uint32_t current_x = 0;
     uint32_t current_y = 0;
     uint32_t max_row_height = 0;
 
-    // For now, we'll just load ASCII 32-126
     for (char32_t c = 32; c < 127; ++c) {
-        std::cout << "Sigil: Packing glyph " << (int)c << std::endl;
         auto glyph_res = engine.get_glyph(c);
         if (!glyph_res) continue;
 
@@ -1017,12 +1012,9 @@ void Sigil::create_glyph_atlas(GlyphEngine& engine) {
         max_row_height = std::max(max_row_height, glyph.metric.height);
     }
 
-    // Transfer atlas_data to GPU
-    std::cout << "Sigil: Uploading atlas to GPU..." << std::endl;
     VkBuffer staging_buffer;
     VkDeviceMemory staging_buffer_memory;
-    
-    std::cout << "Sigil: Creating staging buffer..." << std::endl;
+
     VkBufferCreateInfo buffer_info{};
 
     buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
@@ -1034,11 +1026,9 @@ void Sigil::create_glyph_atlas(GlyphEngine& engine) {
         std::println(stderr, "Sigil: Failed to create staging buffer");
         return;
     }
-    std::cout << "Sigil: Staging buffer created" << std::endl;
+
     VkMemoryRequirements mem_reqs_buf;
-    std::cout << "Sigil: Getting buffer memory requirements..." << std::endl;
     vkGetBufferMemoryRequirements(device_, staging_buffer, &mem_reqs_buf);
-    std::cout << "Sigil: Buffer memory requirements: " << mem_reqs_buf.size << std::endl;
     
     VkMemoryAllocateInfo alloc_info_buf{};
     alloc_info_buf.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
@@ -1131,7 +1121,6 @@ void Sigil::create_glyph_atlas(GlyphEngine& engine) {
 void Sigil::initialize_assets(GlyphEngine& engine) {
     create_glyph_atlas(engine);
     create_descriptor_set();
-    std::cout << "Sigil: Assets and descriptors initialized" << std::endl;
 }
 
 uint32_t Sigil::find_memory_type(uint32_t typeFilter, VkMemoryPropertyFlags properties) {
@@ -1195,6 +1184,7 @@ void Sigil::create_descriptor_set() {
     alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     alloc_info.descriptorPool = descriptor_pool_;
     alloc_info.descriptorSetCount = 1;
+    alloc_info.pSetLayouts = &descriptor_set_layout_;
 
     if (vkAllocateDescriptorSets(device_, &alloc_info, &descriptor_set_) != VK_SUCCESS) {
         std::println(stderr, "Sigil: Failed to allocate descriptor set");
