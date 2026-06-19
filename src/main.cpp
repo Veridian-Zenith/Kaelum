@@ -47,8 +47,18 @@ int main() {
                           static_cast<uint16_t>(wpx), static_cast<uint16_t>(hpx));
     });
 
-    // Set initial PTY size
-    loom.set_pty_size(static_cast<uint16_t>(Kaelum::k_default_cols), static_cast<uint16_t>(Kaelum::k_default_rows));
+    // Sync grid + PTY to the actual window size from the compositor
+    {
+        uint32_t wpx = sigil.configured_width();
+        uint32_t hpx = sigil.configured_height();
+        uint32_t cols = (cw > 0) ? wpx / cw : Kaelum::k_default_cols;
+        uint32_t rows = (ch > 0) ? hpx / ch : Kaelum::k_default_rows;
+        if (cols == 0) cols = 1;
+        if (rows == 0) rows = 1;
+        nexus.resize(cols, rows);
+        loom.set_pty_size(static_cast<uint16_t>(cols), static_cast<uint16_t>(rows),
+                          static_cast<uint16_t>(wpx), static_cast<uint16_t>(hpx));
+    }
 
     // Map Linux input scancodes to ASCII
     std::map<uint32_t, char> key_map = {

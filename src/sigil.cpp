@@ -835,6 +835,16 @@ void Sigil::render(const Nexus& nexus) {
         vertices.resize(vertex_buffer_capacity_);
     }
     size_t vertex_count = vertices.size();
+    if (render_diag_count_ < 5) {
+        size_t non_space = 0;
+        for (size_t i = 0; i < n_rows * n_cols; ++i) {
+            if (grid[i].codepoint != U' ' && grid[i].codepoint != 0) ++non_space;
+        }
+        std::println("Sigil: render#{} grid={}x{} non_space={} verts={} extent={}x{}",
+                     render_diag_count_, n_cols, n_rows, non_space, vertex_count,
+                     extent_.width, extent_.height);
+        ++render_diag_count_;
+    }
     if (!vertices.empty()) {
         std::memcpy(vertex_buffer_mapped_, vertices.data(), vertex_count * sizeof(SigilVertex));
     }

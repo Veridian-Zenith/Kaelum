@@ -148,6 +148,7 @@ namespace Kaelum {
         bool needs_resize_ = false;
         bool should_close_ = false;
         bool frame_pending_ = false;
+        uint32_t render_diag_count_ = 0;
         struct wl_callback* frame_callback_ = nullptr;
         std::vector<VkImage> swapchain_images_;
         std::vector<VkImageView> swapchain_image_views_;
