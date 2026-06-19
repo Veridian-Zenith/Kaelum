@@ -123,8 +123,14 @@ static const struct wl_registry_listener registry_listener = {
 
 // XDG Surface Helpers
 static void xdg_surface_handle_configure(void* data, struct xdg_surface* xdg_surface, uint32_t serial) {
-    xdg_surface_ack_configure(xdg_surface, serial);
     Sigil* sigil = static_cast<Sigil*>(data);
+    xdg_surface_ack_configure(xdg_surface, serial);
+    // Per Wayland protocol: ack → set geometry → commit
+    uint32_t w = sigil->configured_width();
+    uint32_t h = sigil->configured_height();
+    if (w > 0 && h > 0) {
+        xdg_surface_set_window_geometry(xdg_surface, 0, 0, w, h);
+    }
     if (sigil->get_wl_surface()) {
         wl_surface_commit(sigil->get_wl_surface());
     }
@@ -343,11 +349,7 @@ std::expected<void, SigilError> Sigil::init_level_zero() {
 std::expected<void, SigilError> Sigil::create_swapchain(VkSwapchainKHR old_swapchain) {
     VkSurfaceCapabilitiesKHR capabilities{};
     vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physical_device_, vk_surface_, &capabilities);
-    
-    if (capabilities.currentExtent.width == 0 || capabilities.currentExtent.height == 0) {
-        return std::unexpected(SigilError::AllocationFailed);
-    }
- 
+
     uint32_t format_count;
     vkGetPhysicalDeviceSurfaceFormatsKHR(physical_device_, vk_surface_, &format_count, nullptr);
     if (format_count == 0) {
@@ -386,9 +388,13 @@ std::expected<void, SigilError> Sigil::create_swapchain(VkSwapchainKHR old_swapc
     }
  
     VkExtent2D actualExtent = capabilities.currentExtent;
-    if (actualExtent.width == UINT32_MAX) {
-        actualExtent.width = std::clamp(configured_width_, capabilities.minImageExtent.width, capabilities.maxImageExtent.width);
-        actualExtent.height = std::clamp(configured_height_, capabilities.minImageExtent.height, capabilities.maxImageExtent.height);
+    if (actualExtent.width == UINT32_MAX || actualExtent.width == 0) {
+        actualExtent.width = configured_width_;
+        actualExtent.height = configured_height_;
+    }
+    if (capabilities.maxImageExtent.width > 0) {
+        actualExtent.width = std::clamp(actualExtent.width, capabilities.minImageExtent.width, capabilities.maxImageExtent.width);
+        actualExtent.height = std::clamp(actualExtent.height, capabilities.minImageExtent.height, capabilities.maxImageExtent.height);
     }
 
     if (actualExtent.width == 0 || actualExtent.height == 0) {
@@ -890,6 +896,8 @@ void Sigil::handle_configure(uint32_t width, uint32_t height) {
     if (initial_configure_done_) {
         needs_resize_ = true;
     }
+    std::println("Sigil: Configure {}x{} (stored: {}x{}, init_done: {})",
+                 width, height, configured_width_, configured_height_, initial_configure_done_);
 }
 
 void Sigil::process_pending_resize() {

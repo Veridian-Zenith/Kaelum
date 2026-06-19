@@ -81,6 +81,8 @@ namespace Kaelum {
     bool should_close() const { return should_close_; }
     void request_close() { should_close_ = true; }
     void frame_done() { frame_pending_ = false; frame_callback_ = nullptr; }
+    uint32_t configured_width() const { return configured_width_; }
+    uint32_t configured_height() const { return configured_height_; }
 
     /**
      * @brief Polls Wayland events and updates surface state.
