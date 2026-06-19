@@ -2,7 +2,7 @@
 
 #include <cstdint>
 #include <string_view>
-#include <array>
+#include <vector>
 
 namespace Kaelum {
 
@@ -21,16 +21,18 @@ namespace Kaelum {
         constexpr bool operator==(const Color&) const = default;
     };
 
-    constexpr Color nord_bg = {46, 52, 64, 255};
-    constexpr Color nord_fg = {216, 222, 233, 255};
+    // Veridian Zenith "Atmosphere" palette — deep void with amber accents
+    constexpr Color vz_bg      = {5, 2, 0, 255};       // --vz-bg-primary  #050200
+    constexpr Color vz_fg      = {243, 244, 246, 255};  // body text         #f3f4f6
+    constexpr Color vz_accent  = {255, 179, 71, 255};   // --vz-accent-vibrant #FFB347
 
     /**
      * @brief A single terminal cell
      */
     struct Cell {
         char32_t codepoint = U' ';
-        Color fg = nord_fg;
-        Color bg = nord_bg;
+        Color fg = vz_fg;
+        Color bg = vz_bg;
         uint32_t attrs = 0; // Bold, Italic, Underline, etc.
 
         constexpr bool operator==(const Cell&) const = default;
@@ -39,6 +41,6 @@ namespace Kaelum {
     /**
      * @brief Grid of cells representing the terminal state
      */
-    using Grid = std::array<Cell, k_default_cols * k_default_rows>;
+    using Grid = std::vector<Cell>;
 
 } // namespace Kaelum

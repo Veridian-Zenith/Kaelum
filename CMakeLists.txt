@@ -45,11 +45,11 @@ endif()
 
 # ---- Compiler & Feature Flags ----
 # Optimized for performance and security, mirroring Voix's professional standards
-set(COMMON_FLAGS "-march=${KAELUM_ARCH} -Oz -pipe -fno-plt -fstack-protector-strong \
+set(COMMON_FLAGS "-march=${KAELUM_ARCH} -pipe -fno-plt -fstack-protector-strong \
 -fstack-clash-protection -D_FORTIFY_SOURCE=3 -fPIE -flto=thin -fvisibility=hidden \
 -fexperimental-library -std=c++26")
 
-set(DEBUG_FLAGS "-g -fstandalone-debug -fno-omit-frame-pointer")
+set(DEBUG_FLAGS "-g -O1 -fstandalone-debug -fno-omit-frame-pointer")
 set(RELEASE_FLAGS "-O3 -DNDEBUG")
 
 set(CMAKE_CXX_FLAGS "${COMMON_FLAGS} ${DEBUG_FLAGS}" CACHE STRING "" FORCE)
@@ -149,6 +149,28 @@ target_link_libraries(kaelum PRIVATE kaelum_lib)
 
 target_compile_options(kaelum_lib PRIVATE -Wall -Wextra)
 target_compile_options(kaelum PRIVATE -Wall -Wextra)
+
+# ---- Shader Compilation ----
+find_program(GLSLC glslc)
+if(GLSLC)
+    set(SHADER_DIR ${CMAKE_SOURCE_DIR}/shaders)
+    set(SHADER_SOURCES ${SHADER_DIR}/test.vert ${SHADER_DIR}/test.frag)
+    foreach(SHADER_SRC ${SHADER_SOURCES})
+        get_filename_component(SHADER_NAME ${SHADER_SRC} NAME)
+        set(SHADER_SPV ${SHADER_DIR}/${SHADER_NAME}.spv)
+        add_custom_command(
+            OUTPUT ${SHADER_SPV}
+            COMMAND ${GLSLC} ${SHADER_SRC} -o ${SHADER_SPV}
+            DEPENDS ${SHADER_SRC}
+            COMMENT "Compiling shader ${SHADER_NAME}"
+        )
+        list(APPEND SHADER_SPV_FILES ${SHADER_SPV})
+    endforeach()
+    add_custom_target(shaders ALL DEPENDS ${SHADER_SPV_FILES})
+    add_dependencies(kaelum shaders)
+else()
+    message(WARNING "glslc not found. Shaders will not be compiled automatically.")
+endif()
 
 # ---- Installation ----
 include(GNUInstallDirs)

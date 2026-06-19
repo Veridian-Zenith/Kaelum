@@ -18,6 +18,9 @@ struct SigilVertex {
 
 struct GlyphRect {
     float u0, v0, u1, v1;
+    // Pixel-space metrics for positioning within a cell
+    int32_t bearing_x, bearing_y;
+    uint32_t width, height, advance;
 };
 
 // Wayland type aliases to avoid namespace collisions
@@ -70,23 +73,51 @@ namespace Kaelum {
     void set_keyboard_callback(std::function<void(uint32_t key, bool pressed)> callback);
 
     /**
+     * @brief Sets a callback for window resize events (cols, rows, width_px, height_px).
+     */
+    void set_resize_callback(std::function<void(uint32_t cols, uint32_t rows, uint32_t wpx, uint32_t hpx)> callback) {
+        resize_callback_ = std::move(callback);
+    }
+
+    void set_cell_size(uint32_t w, uint32_t h) { cell_width_ = w; cell_height_ = h; }
+
+    bool should_close() const { return should_close_; }
+    void request_close() { should_close_ = true; }
+    void frame_done() { frame_pending_ = false; frame_callback_ = nullptr; }
+    uint32_t configured_width() const { return configured_width_; }
+    uint32_t configured_height() const { return configured_height_; }
+
+    /**
      * @brief Polls Wayland events and updates surface state.
      */
     void poll_events();
 
-    void prepare_read() { wl_display_prepare_read(display_); }
+    bool prepare_read() { return wl_display_prepare_read(display_) == 0; }
+    void cancel_read() { wl_display_cancel_read(display_); }
     void dispatch_pending() { wl_display_dispatch_pending(display_); }
+    void flush() { wl_display_flush(display_); }
 
     /**
      * @brief Returns the Wayland display file descriptor.
      */
     int get_display_fd() const { return wl_display_get_fd(display_); }
+    WaylandSurface* get_wl_surface() const { return wl_surface_; }
 
 
         /**
          * @brief Handles window resize events.
          */
         void on_resize(uint32_t width, uint32_t height);
+
+        /**
+         * @brief Called from xdg_toplevel configure to store dimensions.
+         */
+        void handle_configure(uint32_t width, uint32_t height);
+
+        /**
+         * @brief Process any pending resize (deferred from configure events).
+         */
+        void process_pending_resize();
 
 
     private:
@@ -101,6 +132,7 @@ namespace Kaelum {
         XdgToplevel* xdg_toplevel_ = nullptr;
         struct wl_seat* seat_ = nullptr;
         struct wl_keyboard* keyboard_ = nullptr;
+        struct wl_pointer* pointer_ = nullptr;
 
         // Vulkan handles
         VkInstance instance_ = VK_NULL_HANDLE;
@@ -110,12 +142,23 @@ namespace Kaelum {
         VkSurfaceKHR vk_surface_ = VK_NULL_HANDLE;
         VkSwapchainKHR swapchain_ = VK_NULL_HANDLE;
         VkExtent2D extent_ = {0, 0};
+        uint32_t configured_width_ = 800;
+        uint32_t configured_height_ = 600;
+        bool initial_configure_done_ = false;
+        bool needs_resize_ = false;
+        bool should_close_ = false;
+        bool frame_pending_ = false;
+        uint32_t render_diag_count_ = 0;
+        struct wl_callback* frame_callback_ = nullptr;
         std::vector<VkImage> swapchain_images_;
         std::vector<VkImageView> swapchain_image_views_;
         std::vector<VkFramebuffer> swapchain_framebuffers_;
         VkRenderPass render_pass_ = VK_NULL_HANDLE;
         VkPipeline graphics_pipeline_ = VK_NULL_HANDLE;
         VkPipelineLayout pipeline_layout_ = VK_NULL_HANDLE;
+        VkDescriptorSetLayout descriptor_set_layout_ = VK_NULL_HANDLE;
+        VkFormat swapchain_format_ = VK_FORMAT_B8G8R8A8_SRGB;
+        uint32_t graphics_queue_family_ = 0;
 
         // Command buffers
         VkCommandPool command_pool_ = VK_NULL_HANDLE;
@@ -125,12 +168,12 @@ namespace Kaelum {
         VkSemaphore image_available_semaphore_ = VK_NULL_HANDLE;
         VkSemaphore render_finished_semaphore_ = VK_NULL_HANDLE;
         VkFence in_flight_fence_ = VK_NULL_HANDLE;
-        uint32_t current_frame_ = 0;
 
         // Vertex Buffer
         VkBuffer vertex_buffer_ = VK_NULL_HANDLE;
         VkDeviceMemory vertex_buffer_memory_ = VK_NULL_HANDLE;
         void* vertex_buffer_mapped_ = nullptr;
+        size_t vertex_buffer_capacity_ = 0;
 
         // Glyph Atlas
         VkImage glyph_atlas_image_ = VK_NULL_HANDLE;
@@ -143,6 +186,13 @@ namespace Kaelum {
         VkDescriptorPool descriptor_pool_ = VK_NULL_HANDLE;
         VkDescriptorSet descriptor_set_ = VK_NULL_HANDLE;
 
+        // Cell dimensions for resize calculation
+        uint32_t cell_width_ = 8;
+        uint32_t cell_height_ = 14;
+
+        // Callbacks
+        std::function<void(uint32_t, uint32_t, uint32_t, uint32_t)> resize_callback_;
+
         // Intel Level Zero handles (opaque pointers)
         void* lz_driver_ = nullptr;
         void* lz_device_ = nullptr;
@@ -151,7 +201,7 @@ namespace Kaelum {
         std::expected<void, SigilError> init_wayland();
         std::expected<void, SigilError> init_vulkan();
         std::expected<void, SigilError> init_level_zero();
-        std::expected<void, SigilError> create_swapchain();
+        std::expected<void, SigilError> create_swapchain(VkSwapchainKHR old_swapchain = VK_NULL_HANDLE);
         void create_framebuffers();
         void create_render_pass();
         void create_graphics_pipeline();

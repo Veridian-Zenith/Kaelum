@@ -1,5 +1,4 @@
 #include "glyph_engine.hpp"
-#include <iostream>
 #include <print>
 #include <cstring>
 
@@ -51,6 +50,7 @@ std::expected<void, GlyphError> GlyphEngine::load_font(const std::string& font_f
 
     FT_Set_Pixel_Sizes(face_, 0, 14);
     line_height_ = static_cast<uint32_t>(face_->size->metrics.height >> 6);
+    cell_width_ = static_cast<uint32_t>(face_->size->metrics.max_advance >> 6);
 
     std::println("GlyphEngine: Loaded font face: {}", reinterpret_cast<const char*>(face_->family_name));
 
@@ -73,8 +73,8 @@ std::expected<GlyphData, GlyphError> GlyphEngine::get_glyph(char32_t codepoint) 
     FT_GlyphSlot slot = face_->glyph;
     GlyphData data;
     data.metric = {
-        .bearing_x = static_cast<uint32_t>(slot->bitmap_left),
-        .bearing_y = static_cast<uint32_t>(slot->bitmap_top),
+        .bearing_x = static_cast<int32_t>(slot->bitmap_left),
+        .bearing_y = static_cast<int32_t>(slot->bitmap_top),
         .width = static_cast<uint32_t>(slot->bitmap.width),
         .height = static_cast<uint32_t>(slot->bitmap.rows),
         .advance = static_cast<uint32_t>(slot->advance.x >> 6)

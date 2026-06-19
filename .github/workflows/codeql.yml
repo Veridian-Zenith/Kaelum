@@ -36,7 +36,7 @@ jobs:
       - name: Install dependencies and oneAPI
         run: |
           sudo apt-get update
-          sudo apt-get install -y liburing-dev libvulkan-dev libwayland-dev libfreetype6-dev libfontconfig1-dev wget ninja-build ccache mold
+          sudo apt-get install -y liburing-dev libvulkan-dev libwayland-dev libfreetype6-dev libfontconfig1-dev wget ninja-build ccache mold glslang-tools
           
           # Install Intel oneAPI Base Toolkit (Compiler)
           wget -O- https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB | gpg --dearmor | sudo tee /usr/share/keyrings/oneapi-archive-keyring.gpg > /dev/null
