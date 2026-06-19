@@ -71,13 +71,19 @@ int main() {
     };
 
     while (true) {
-        // 1. Prepare Wayland for reading
-        sigil.prepare_read();
-        
-        // Poll for events
+        sigil.dispatch_pending();
+        sigil.flush();
+
+        if (!sigil.prepare_read()) {
+            sigil.dispatch_pending();
+            sigil.render(nexus);
+            continue;
+        }
+
         int ret = poll(poll_fds.data(), poll_fds.size(), 1);
-        
+
         if (ret < 0) {
+            sigil.cancel_read();
             std::println(stderr, "Poll error.");
             break;
         }
@@ -86,7 +92,6 @@ int main() {
             sigil.poll_events();
         } else {
             sigil.cancel_read();
-            sigil.dispatch_pending();
         }
 
         if (poll_fds[1].revents & POLLIN) {

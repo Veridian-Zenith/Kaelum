@@ -34,7 +34,7 @@ std::expected<void, LoomError> Loom::initialize() {
     }
 
     if (child_pid_ == 0) {
-        // Child: Execute the user's preferred shell, with Fish as first preference
+        // Child: Execute user's preferred shell ($SHELL), fall back to fish, then /bin/sh
         const char* shell = std::getenv("SHELL");
         if (!shell || shell[0] == '\0') shell = "/usr/bin/fish";
         execl(shell, shell, nullptr);

@@ -74,9 +74,10 @@ namespace Kaelum {
      */
     void poll_events();
 
-    void prepare_read() { wl_display_prepare_read(display_); }
+    bool prepare_read() { return wl_display_prepare_read(display_) == 0; }
     void cancel_read() { wl_display_cancel_read(display_); }
     void dispatch_pending() { wl_display_dispatch_pending(display_); }
+    void flush() { wl_display_flush(display_); }
 
     /**
      * @brief Returns the Wayland display file descriptor.

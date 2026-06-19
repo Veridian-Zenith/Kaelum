@@ -696,18 +696,19 @@ void Sigil::render(const Nexus& nexus) {
     if (swapchain_ == VK_NULL_HANDLE) return;
 
     vkWaitForFences(device_, 1, &in_flight_fence_, VK_TRUE, UINT64_MAX);
-    vkResetFences(device_, 1, &in_flight_fence_);
 
     uint32_t image_index;
     VkResult result = vkAcquireNextImageKHR(device_, swapchain_, UINT64_MAX, image_available_semaphore_, VK_NULL_HANDLE, &image_index);
 
     if (result == VK_ERROR_OUT_OF_DATE_KHR) {
-        on_resize(0, 0); 
+        on_resize(0, 0);
         return;
     } else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
         std::println(stderr, "Sigil: Failed to acquire swapchain image");
         return;
     }
+
+    vkResetFences(device_, 1, &in_flight_fence_);
 
     const auto& grid = nexus.get_grid();
     std::vector<SigilVertex> vertices;
@@ -866,6 +867,12 @@ void Sigil::create_command_pool() {
 }
 
 void Sigil::record_command_buffers() {
+    if (!command_buffers_.empty()) {
+        vkFreeCommandBuffers(device_, command_pool_,
+            static_cast<uint32_t>(command_buffers_.size()), command_buffers_.data());
+        command_buffers_.clear();
+    }
+
     uint32_t image_count = static_cast<uint32_t>(swapchain_images_.size());
     command_buffers_.resize(image_count);
 
