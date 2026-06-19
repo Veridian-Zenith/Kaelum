@@ -83,6 +83,7 @@ namespace Kaelum {
      * @brief Returns the Wayland display file descriptor.
      */
     int get_display_fd() const { return wl_display_get_fd(display_); }
+    WaylandSurface* get_wl_surface() const { return wl_surface_; }
 
 
         /**
@@ -94,6 +95,11 @@ namespace Kaelum {
          * @brief Called from xdg_toplevel configure to store dimensions.
          */
         void handle_configure(uint32_t width, uint32_t height);
+
+        /**
+         * @brief Process any pending resize (deferred from configure events).
+         */
+        void process_pending_resize();
 
 
     private:
@@ -120,6 +126,7 @@ namespace Kaelum {
         uint32_t configured_width_ = 800;
         uint32_t configured_height_ = 600;
         bool initial_configure_done_ = false;
+        bool needs_resize_ = false;
         std::vector<VkImage> swapchain_images_;
         std::vector<VkImageView> swapchain_image_views_;
         std::vector<VkFramebuffer> swapchain_framebuffers_;

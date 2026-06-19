@@ -76,6 +76,7 @@ int main() {
 
         if (!sigil.prepare_read()) {
             sigil.dispatch_pending();
+            sigil.process_pending_resize();
             sigil.render(nexus);
             continue;
         }
@@ -110,7 +111,8 @@ int main() {
                 }
             }
         }
-        
+
+        sigil.process_pending_resize();
         sigil.render(nexus);
     }
  

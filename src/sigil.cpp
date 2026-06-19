@@ -115,9 +115,12 @@ static const struct wl_registry_listener registry_listener = {
 };
 
 // XDG Surface Helpers
-static void xdg_surface_handle_configure(void* /*data*/, struct xdg_surface* xdg_surface, uint32_t serial) {
-    std::println("Sigil: Received xdg_surface configure event (serial: {})", serial);
+static void xdg_surface_handle_configure(void* data, struct xdg_surface* xdg_surface, uint32_t serial) {
     xdg_surface_ack_configure(xdg_surface, serial);
+    Sigil* sigil = static_cast<Sigil*>(data);
+    if (sigil->get_wl_surface()) {
+        wl_surface_commit(sigil->get_wl_surface());
+    }
 }
 
 static const struct xdg_surface_listener xdg_surface_listener = {
@@ -408,8 +411,11 @@ std::expected<void, SigilError> Sigil::create_swapchain() {
     create_info.presentMode = present_mode;
     create_info.clipped = VK_TRUE;
  
-    if (vkCreateSwapchainKHR(device_, &create_info, nullptr, &swapchain_) != VK_SUCCESS) {
-        std::println(stderr, "Sigil: Failed to create swapchain");
+    VkResult sc_result = vkCreateSwapchainKHR(device_, &create_info, nullptr, &swapchain_);
+    if (sc_result != VK_SUCCESS) {
+        std::println(stderr, "Sigil: Failed to create swapchain (VkResult: {}, extent: {}x{}, format: {}, composite: {})",
+                     static_cast<int>(sc_result), actualExtent.width, actualExtent.height,
+                     static_cast<int>(surface_format.format), static_cast<int>(composite_alpha));
         return std::unexpected(SigilError::AllocationFailed);
     }
  
@@ -859,8 +865,14 @@ void Sigil::handle_configure(uint32_t width, uint32_t height) {
         configured_height_ = height;
     }
     if (initial_configure_done_) {
-        on_resize(configured_width_, configured_height_);
+        needs_resize_ = true;
     }
+}
+
+void Sigil::process_pending_resize() {
+    if (!needs_resize_) return;
+    needs_resize_ = false;
+    on_resize(configured_width_, configured_height_);
 }
 
 void Sigil::on_resize(uint32_t width, uint32_t height) {
@@ -871,6 +883,10 @@ void Sigil::on_resize(uint32_t width, uint32_t height) {
     }
     vkDeviceWaitIdle(device_);
     cleanup_swapchain();
+    if (swapchain_ != VK_NULL_HANDLE) {
+        vkDestroySwapchainKHR(device_, swapchain_, nullptr);
+        swapchain_ = VK_NULL_HANDLE;
+    }
     if (!create_swapchain()) {
         std::println(stderr, "Sigil: Failed to recreate swapchain during resize");
         return;
