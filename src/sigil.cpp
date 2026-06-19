@@ -164,9 +164,9 @@ static const struct xdg_toplevel_listener xdg_toplevel_listener = {
 
 // Pointer listener — handles cursor enter/leave for proper Hyprland focus
 static const struct wl_pointer_listener pointer_listener_inst = {
-    .enter = [](void*, struct wl_pointer* pointer, uint32_t serial,
+    .enter = [](void*, struct wl_pointer*, uint32_t,
                struct wl_surface*, wl_fixed_t, wl_fixed_t) {
-        wl_pointer_set_cursor(pointer, serial, nullptr, 0, 0);
+        // Don't call wl_pointer_set_cursor — let the compositor keep its default cursor
     },
     .leave = [](void*, struct wl_pointer*, uint32_t, struct wl_surface*) {},
     .motion = [](void*, struct wl_pointer*, uint32_t, wl_fixed_t, wl_fixed_t) {},

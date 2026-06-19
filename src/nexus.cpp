@@ -12,6 +12,7 @@ Nexus::Nexus() {
     dispatch_table_[static_cast<size_t>(State::Ground)] = &Nexus::handle_ground;
     dispatch_table_[static_cast<size_t>(State::Escape)] = &Nexus::handle_escape;
     dispatch_table_[static_cast<size_t>(State::CSI)]    = &Nexus::handle_csi;
+    dispatch_table_[static_cast<size_t>(State::EscapeSkip)] = &Nexus::handle_escape_skip;
     dispatch_table_[static_cast<size_t>(State::OSC)]    = &Nexus::handle_osc;
 }
 
@@ -51,28 +52,41 @@ void Nexus::handle_escape(uint8_t c) {
     if (c == '[') {
         current_state_ = State::CSI;
         sequence_buffer_.clear();
+        csi_prefix_ = 0;
     } else if (c == ']') {
         current_state_ = State::OSC;
         sequence_buffer_.clear();
+    } else if (c == '(' || c == ')' || c == '*' || c == '+') {
+        // Character set designation — next byte selects the set; skip it
+        current_state_ = State::EscapeSkip;
     } else {
-        // Not a valid sequence, treat as normal text (ESC + char)
-        handle_ground(27);
-        handle_ground(c);
+        // Single-character escape: M (reverse index), 7/8 (save/restore cursor),
+        // =, >, c, etc. — silently ignore for now
         current_state_ = State::Ground;
     }
 }
 
+void Nexus::handle_escape_skip(uint8_t /*c*/) {
+    current_state_ = State::Ground;
+}
+
 void Nexus::handle_csi(uint8_t c) {
-    if (std::isdigit(c) || c == ';') {
+    if (c == '?' || c == '>' || c == '!') {
+        csi_prefix_ = static_cast<char>(c);
+    } else if (std::isdigit(c) || c == ';') {
         sequence_buffer_.push_back(c);
     } else {
         process_csi(c);
         sequence_buffer_.clear();
+        csi_prefix_ = 0;
         current_state_ = State::Ground;
     }
 }
 
 void Nexus::process_csi(uint8_t final_char) {
+    // DEC private mode sequences (CSI ? ...) and secondary DA (CSI > ...) — silently ignore
+    if (csi_prefix_ != 0) return;
+
     // Parse parameters from sequence_buffer_
     std::vector<int> params;
     int current_param = 0;
@@ -111,8 +125,13 @@ void Nexus::process_csi(uint8_t final_char) {
                 cursor_y_ = std::clamp(row - 1, 0, (int)rows_ - 1);
             }
             break;
-        case 'f': // Cursor Position (CUP)
-            // Same as 'H'
+        case 'f': // Cursor Position (HVP) — same as 'H'
+            {
+                int row = params.size() > 0 ? params[0] : 1;
+                int col = params.size() > 1 ? params[1] : 1;
+                cursor_x_ = std::clamp(col - 1, 0, (int)cols_ - 1);
+                cursor_y_ = std::clamp(row - 1, 0, (int)rows_ - 1);
+            }
             break;
         case 'J': // Erase in Display (ED)
             {
@@ -202,6 +221,35 @@ void Nexus::process_csi(uint8_t final_char) {
         case 'm': // Select Graphic Rendition (SGR)
             parse_sgr(sequence_buffer_);
             break;
+        case 'r': // Set Scrolling Region (DECSTBM) — ignored for now
+            break;
+        case 'c': // Device Attributes (DA) — ignored, query from shell
+            break;
+        case 'n': // Device Status Report — ignored
+            break;
+        case 'l': // Reset Mode — standard modes, ignored
+            break;
+        case 'h': // Set Mode — standard modes, ignored
+            break;
+        case 's': // Save Cursor Position (SCP)
+            break;
+        case 'u': // Restore Cursor Position (RCP)
+            break;
+        case 'X': // Erase Characters (ECH)
+            {
+                int n = params.empty() ? 1 : params[0];
+                for (int i = 0; i < n && cursor_x_ + i < cols_; ++i)
+                    grid_[cursor_y_ * cols_ + cursor_x_ + i] = Cell{};
+            }
+            break;
+        case 'S': // Scroll Up
+            {
+                int n = params.empty() ? 1 : params[0];
+                for (int i = 0; i < n; ++i) scroll_up();
+            }
+            break;
+        case 'T': // Scroll Down
+            break;
         default:
             break;
     }
@@ -250,7 +298,17 @@ void Nexus::clear_screen() {
 }
 
 void Nexus::handle_osc(uint8_t c) {
-    if (c == '\a' || c == '\n') {
+    if (c == '\a') {
+        // BEL terminates OSC
+        sequence_buffer_.clear();
+        current_state_ = State::Ground;
+    } else if (c == 27) {
+        // ESC inside OSC — likely ST (\e\\). Consume next byte if it's '\\'.
+        // For simplicity, just end the OSC now.
+        sequence_buffer_.clear();
+        current_state_ = State::Ground;
+    } else if (c == 0x9c) {
+        // ST (C1 control)
         sequence_buffer_.clear();
         current_state_ = State::Ground;
     } else {

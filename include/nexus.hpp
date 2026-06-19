@@ -17,7 +17,7 @@ namespace Kaelum {
         Ground = 0,
         Escape,
         CSI,
-        SGR,
+        EscapeSkip,  // Consume one byte after ESC ( ) * +
         OSC,
         Count // Sentinel for dispatch table size
     };
@@ -48,6 +48,7 @@ namespace Kaelum {
         void handle_ground(uint8_t c);
         void handle_escape(uint8_t c);
         void handle_csi(uint8_t c);
+        void handle_escape_skip(uint8_t c);
         void handle_osc(uint8_t c);
 
         // Sequence helpers
@@ -61,6 +62,7 @@ namespace Kaelum {
         size_t cursor_y_ = 0;
         State current_state_ = State::Ground;
         std::vector<uint8_t> sequence_buffer_;
+        char csi_prefix_ = 0;  // '?' for DEC private, '>' for secondary DA, 0 for standard
 
         void move_cursor(int dx, int dy);
         void scroll_up();
