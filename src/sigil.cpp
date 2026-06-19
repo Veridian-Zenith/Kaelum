@@ -54,6 +54,7 @@ Sigil::~Sigil() {
     if (instance_ != VK_NULL_HANDLE) vkDestroyInstance(instance_, nullptr);
 
     // Wayland cleanup
+    if (frame_callback_) wl_callback_destroy(frame_callback_);
     if (keyboard_) wl_keyboard_destroy(keyboard_);
     if (xdg_toplevel_) xdg_toplevel_destroy(xdg_toplevel_);
     if (xdg_surface_) xdg_surface_destroy(xdg_surface_);
@@ -102,6 +103,12 @@ void registry_handle_global(void* data, struct wl_registry* registry, uint32_t i
         std::println("Sigil: Bound wl_compositor");
     } else if (iface == "xdg_wm_base") {
         sigil->xdg_wm_base_ = (struct xdg_wm_base*)wl_registry_bind(registry, id, &xdg_wm_base_interface, version);
+        static const struct xdg_wm_base_listener wm_base_listener = {
+            .ping = [](void*, struct xdg_wm_base* wm_base, uint32_t serial) {
+                xdg_wm_base_pong(wm_base, serial);
+            }
+        };
+        xdg_wm_base_add_listener(sigil->xdg_wm_base_, &wm_base_listener, sigil);
         std::println("Sigil: Bound xdg_wm_base");
     } else if (iface == "wl_seat") {
         sigil->seat_ = (struct wl_seat*)wl_registry_bind(registry, id, &wl_seat_interface, version);
@@ -128,17 +135,22 @@ static const struct xdg_surface_listener xdg_surface_listener = {
 };
 
 // XDG Toplevel Helpers
-static void xdg_toplevel_handle_configure(void* data, struct xdg_toplevel* xdg_toplevel, int32_t width, int32_t height, struct wl_array* states) {
-    (void)xdg_toplevel;
-    (void)states;
+static void xdg_toplevel_handle_configure(void* data, struct xdg_toplevel* /*xdg_toplevel*/, int32_t width, int32_t height, struct wl_array* /*states*/) {
     Sigil* sigil = static_cast<Sigil*>(data);
-    sigil->handle_configure(width > 0 ? static_cast<uint32_t>(width) : 0,
-                            height > 0 ? static_cast<uint32_t>(height) : 0);
+    // width/height == 0 means compositor lets us choose; keep current configured size
+    if (width > 0 && height > 0) {
+        sigil->handle_configure(static_cast<uint32_t>(width), static_cast<uint32_t>(height));
+    }
+}
+
+static void xdg_toplevel_handle_close(void* data, struct xdg_toplevel* /*xdg_toplevel*/) {
+    Sigil* sigil = static_cast<Sigil*>(data);
+    sigil->request_close();
 }
 
 static const struct xdg_toplevel_listener xdg_toplevel_listener = {
     .configure = xdg_toplevel_handle_configure,
-    .close = [](void*, struct xdg_toplevel*) {},
+    .close = xdg_toplevel_handle_close,
     .configure_bounds = [](void*, struct xdg_toplevel*, int32_t, int32_t) {},
     .wm_capabilities = [](void*, struct xdg_toplevel*, struct wl_array*) {},
 };
@@ -187,6 +199,7 @@ std::expected<void, SigilError> Sigil::init_wayland() {
 
     xdg_toplevel_set_title(xdg_toplevel_, "Kaelum");
     xdg_toplevel_set_app_id(xdg_toplevel_, "org.veridian.kaelum");
+    xdg_toplevel_set_min_size(xdg_toplevel_, 320, 240);
 
     if (seat_) {
         keyboard_ = wl_seat_get_keyboard(seat_);
@@ -711,8 +724,18 @@ void Sigil::create_sync_objects() {
     }
 }
 
+static void frame_done_cb(void* data, struct wl_callback* callback, uint32_t /*time*/) {
+    wl_callback_destroy(callback);
+    static_cast<Sigil*>(data)->frame_done();
+}
+
+static const struct wl_callback_listener frame_listener = {
+    .done = frame_done_cb,
+};
+
 void Sigil::render(const Nexus& nexus) {
     if (swapchain_ == VK_NULL_HANDLE) return;
+    if (frame_pending_) return;
 
     vkWaitForFences(device_, 1, &in_flight_fence_, VK_TRUE, UINT64_MAX);
 
@@ -845,9 +868,18 @@ void Sigil::render(const Nexus& nexus) {
     presentInfo.pSwapchains = &swapchain_;
     presentInfo.pImageIndices = &image_index;
 
-    if (vkQueuePresentKHR(graphics_queue_, &presentInfo) != VK_SUCCESS) {
+    VkResult present_result = vkQueuePresentKHR(graphics_queue_, &presentInfo);
+    if (present_result == VK_ERROR_OUT_OF_DATE_KHR || present_result == VK_SUBOPTIMAL_KHR) {
+        on_resize(0, 0);
+    } else if (present_result != VK_SUCCESS) {
         std::println(stderr, "Sigil: Failed to present swapchain image");
     }
+
+    // Request frame callback for vsync pacing
+    frame_callback_ = wl_surface_frame(wl_surface_);
+    wl_callback_add_listener(frame_callback_, &frame_listener, this);
+    wl_surface_commit(wl_surface_);
+    frame_pending_ = true;
 }
 
 void Sigil::handle_configure(uint32_t width, uint32_t height) {

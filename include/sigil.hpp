@@ -78,6 +78,10 @@ namespace Kaelum {
 
     void set_cell_size(uint32_t w, uint32_t h) { cell_width_ = w; cell_height_ = h; }
 
+    bool should_close() const { return should_close_; }
+    void request_close() { should_close_ = true; }
+    void frame_done() { frame_pending_ = false; frame_callback_ = nullptr; }
+
     /**
      * @brief Polls Wayland events and updates surface state.
      */
@@ -136,6 +140,9 @@ namespace Kaelum {
         uint32_t configured_height_ = 600;
         bool initial_configure_done_ = false;
         bool needs_resize_ = false;
+        bool should_close_ = false;
+        bool frame_pending_ = false;
+        struct wl_callback* frame_callback_ = nullptr;
         std::vector<VkImage> swapchain_images_;
         std::vector<VkImageView> swapchain_image_views_;
         std::vector<VkFramebuffer> swapchain_framebuffers_;

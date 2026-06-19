@@ -110,7 +110,7 @@ int main() {
         { wake_fd, POLLIN, 0 }
     };
 
-    while (true) {
+    while (!sigil.should_close()) {
         sigil.dispatch_pending();
         sigil.flush();
 
