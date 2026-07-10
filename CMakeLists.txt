@@ -9,7 +9,7 @@ set(CMAKE_CXX_FLAGS "" CACHE STRING "" FORCE)
 set(CMAKE_CXX_FLAGS_RELEASE "" CACHE STRING "" FORCE)
 set(CMAKE_CXX_FLAGS_DEBUG "" CACHE STRING "" FORCE)
 
-project(Kaelum VERSION 0.1.0 LANGUAGES CXX)
+project(Kaelum VERSION 0.1.0 LANGUAGES CXX C)
 
 # ---- Cache Acceleration ----
 if(NOT DEFINED ENV{CCACHE_DISABLE})
@@ -30,8 +30,6 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 # ---- Options ----
 option(KAELUM_USE_MOLD "Use MOLD linker instead of LLD" ON)
-option(KAELUM_ENABLE_LEVEL_ZERO "Enable Intel Level Zero support (optional)" OFF)
-option(KAELUM_USE_SYCL "Enable SYCL compatibility" OFF)
 option(KAELUM_DEBUG "Enable debug layers" OFF)
 
 # ---- Architecture Selection ----
@@ -98,45 +96,14 @@ pkg_check_modules(LIBURING REQUIRED liburing)
 # xkbcommon
 pkg_check_modules(XKBCOMMON REQUIRED xkbcommon)
 
-# ---- Optional: Intel Level Zero / oneAPI ----
-if(KAELUM_ENABLE_LEVEL_ZERO)
-    find_package(LevelZero QUIET)
-    if(LevelZero_FOUND)
-        message(STATUS "Intel Level Zero found: enabling ze_api integration")
-        add_definitions(-DKAELUM_WITH_LEVEL_ZERO)
-    else()
-        # Fallback: try pkg-config
-        pkg_check_modules(ZE_API QUIET ze_api)
-        if(ZE_API_FOUND)
-            message(STATUS "Intel Level Zero found via pkg-config")
-            add_definitions(-DKAELUM_WITH_LEVEL_ZERO)
-        else()
-            message(WARNING "Intel Level Zero not found. Building without Level Zero support.")
-        endif()
-    endif()
-else()
-    message(STATUS "Intel Level Zero disabled by configuration (KAELUM_ENABLE_LEVEL_ZERO=OFF)")
-endif()
-
-# ---- Optional: SYCL ----
-if(KAELUM_USE_SYCL)
-    find_program(SYCL_CXX sycl-cxx QUIET)
-    if(SYCL_CXX)
-        message(STATUS "SYCL enabled")
-        add_definitions(-DKAELUM_WITH_SYCL)
-    else()
-        message(WARNING "SYCL compiler not found. SYCL support disabled.")
-    endif()
-endif()
-
 # ---- Shader compilation ----
 find_program(GLSLANGVALIDATOR glslangValidator)
 if(GLSLANGVALIDATOR)
     message(STATUS "glslangValidator found: compiling shaders")
 
     set(SHADER_SOURCES
-        shaders/test.vert
-        shaders/test.frag
+        shaders/glyph.vert
+        shaders/glyph.frag
     )
 
     foreach(SHADER ${SHADER_SOURCES})
@@ -159,38 +126,75 @@ else()
                     "Install glslang-tools to compile shaders from source.")
 endif()
 
+# ---- xdg-shell protocol generation ----
+find_program(WAYLAND_SCANNER wayland-scanner)
+if(WAYLAND_SCANNER)
+    set(XDG_SHELL_XML "/usr/share/wayland-protocols/stable/xdg-shell/xdg-shell.xml")
+    set(XDG_SHELL_CLIENT_HEADER "${CMAKE_CURRENT_BINARY_DIR}/xdg-shell-client-protocol.h")
+    set(XDG_SHELL_CLIENT_C "${CMAKE_CURRENT_BINARY_DIR}/xdg-shell-client-protocol.c")
+
+    add_custom_command(
+        OUTPUT ${XDG_SHELL_CLIENT_HEADER} ${XDG_SHELL_CLIENT_C}
+        COMMAND ${WAYLAND_SCANNER} client-header ${XDG_SHELL_XML} ${XDG_SHELL_CLIENT_HEADER}
+        COMMAND ${WAYLAND_SCANNER} public-code ${XDG_SHELL_XML} ${XDG_SHELL_CLIENT_C}
+        DEPENDS ${XDG_SHELL_XML}
+        COMMENT "Generating xdg-shell client protocol"
+    )
+
+    add_custom_target(kaelum_xdg_shell ALL DEPENDS ${XDG_SHELL_CLIENT_HEADER} ${XDG_SHELL_CLIENT_C})
+
+    set(KAELUM_GENERATED_SOURCES ${XDG_SHELL_CLIENT_C})
+    set(KAELUM_GENERATED_HEADERS ${XDG_SHELL_CLIENT_HEADER})
+else()
+    message(WARNING "wayland-scanner not found. xdg-shell protocol will not be generated.")
+    set(KAELUM_GENERATED_SOURCES "")
+    set(KAELUM_GENERATED_HEADERS "")
+endif()
+
 # ---- Sources ----
 set(KAELUM_SOURCES
     src/main.cpp
-    src/loom.cpp
-    src/nexus.cpp
-    src/sigil.cpp
+    src/subprocess.cpp
+    src/termio.cpp
+    src/terminal.cpp
+    src/renderer.cpp
     src/glyph_engine.cpp
-    src/xdg-shell-client-protocol.cpp
+    src/surface.cpp
+    ${KAELUM_GENERATED_SOURCES}
 )
 
 set(KAELUM_HEADERS
+    include/subprocess.hpp
+    include/termio.hpp
+    include/terminal.hpp
+    include/renderer.hpp
+    include/glyph_engine.hpp
+    include/surface.hpp
     include/common.hpp
     include/logger.hpp
-    include/loom.hpp
-    include/nexus.hpp
-    include/sigil.hpp
-    include/glyph_engine.hpp
-    include/wayland-protocols/xdg-shell-client-protocol.hpp
 )
 
 # ---- Executable ----
 add_executable(kaelum
     ${KAELUM_SOURCES}
-    ${KAELUM_HEADERS}
 )
+
+# Ensure generated C file is compiled as C
+if(KAELUM_GENERATED_SOURCES)
+    set_source_files_properties(${KAELUM_GENERATED_SOURCES} PROPERTIES LANGUAGE C)
+endif()
 
 if(TARGET kaelum_shaders)
     add_dependencies(kaelum kaelum_shaders)
 endif()
 
+if(TARGET kaelum_xdg_shell)
+    add_dependencies(kaelum kaelum_xdg_shell)
+endif()
+
 target_include_directories(kaelum PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_BINARY_DIR}
     ${WAYLAND_INCLUDE_DIRS}
     ${Vulkan_INCLUDE_DIRS}
     ${FREETYPE_INCLUDE_DIRS}
@@ -207,12 +211,6 @@ target_link_libraries(kaelum PRIVATE
     ${LIBURING_LIBRARIES}
     ${XKBCOMMON_LIBRARIES}
 )
-
-if(KAELUM_ENABLE_LEVEL_ZERO AND LevelZero_FOUND)
-    target_link_libraries(kaelum PRIVATE LevelZero::LevelZero)
-elseif(KAELUM_ENABLE_LEVEL_ZERO AND ZE_API_FOUND)
-    target_link_libraries(kaelum PRIVATE ${ZE_API_LIBRARIES})
-endif()
 
 # ---- Install ----
 install(TARGETS kaelum RUNTIME DESTINATION bin)

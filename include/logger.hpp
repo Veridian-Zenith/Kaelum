@@ -1,11 +1,12 @@
 #pragma once
 
-#include <print>
-#include <format>
-#include <source_location>
 #include <chrono>
 #include <ctime>
 #include <mutex>
+#include <cstdio>
+#include <string>
+#include <format>
+#include <source_location>
 
 namespace Kaelum {
 
@@ -29,8 +30,7 @@ public:
     LogLevel level() const { return level_; }
 
     template<typename... Args>
-    void log(LogLevel lvl, std::format_string<Args...> fmt, Args&&... args,
-             std::source_location loc = std::source_location::current()) {
+    void log(LogLevel lvl, std::source_location loc, std::format_string<Args...> fmt, Args&&... args) {
         if (lvl < level_) return;
 
         std::lock_guard<std::mutex> lock(mutex_);
@@ -41,53 +41,48 @@ public:
         char time_buf[32];
         std::strftime(time_buf, sizeof(time_buf), "%H:%M:%S", std::localtime(&time_t));
 
-        const char* level_str = "";
         const char* color_start = "";
         const char* color_end = "\033[0m";
 
         switch (lvl) {
-            case LogLevel::Trace: level_str = "TRC"; color_start = "\033[90m"; break;
-            case LogLevel::Debug: level_str = "DBG"; color_start = "\033[36m"; break;
-            case LogLevel::Info:  level_str = "INF"; color_start = "\033[32m"; break;
-            case LogLevel::Warn:  level_str = "WRN"; color_start = "\033[33m"; break;
-            case LogLevel::Error: level_str = "ERR"; color_start = "\033[31m"; break;
+            case LogLevel::Trace: color_start = "\033[90m"; break;
+            case LogLevel::Debug: color_start = "\033[36m"; break;
+            case LogLevel::Info:  color_start = "\033[32m"; break;
+            case LogLevel::Warn:  color_start = "\033[33m"; break;
+            case LogLevel::Error: color_start = "\033[31m"; break;
             default: break;
         }
 
-        std::print(stderr, "{}{} {:03d} [{}:{}] ", color_start, time_buf, ms.count(),
-                   loc.file_name(), loc.line());
-        std::print(stderr, fmt, std::forward<Args>(args)...);
-        std::print(stderr, "{}\n", color_end);
+        std::string msg = std::format(fmt, std::forward<Args>(args)...);
+        std::fprintf(stderr, "%s%s %03ld [%s:%d] %s%s\n", 
+                     color_start, time_buf, ms.count(),
+                     loc.file_name(), loc.line(),
+                     msg.c_str(), color_end);
     }
 
     template<typename... Args>
-    void trace(std::format_string<Args...> fmt, Args&&... args,
-               std::source_location loc = std::source_location::current()) {
-        log(LogLevel::Trace, fmt, std::forward<Args>(args)..., loc);
+    void trace(std::source_location loc, std::format_string<Args...> fmt, Args&&... args) {
+        log(LogLevel::Trace, loc, fmt, std::forward<Args>(args)...);
     }
 
     template<typename... Args>
-    void debug(std::format_string<Args...> fmt, Args&&... args,
-               std::source_location loc = std::source_location::current()) {
-        log(LogLevel::Debug, fmt, std::forward<Args>(args)..., loc);
+    void debug(std::source_location loc, std::format_string<Args...> fmt, Args&&... args) {
+        log(LogLevel::Debug, loc, fmt, std::forward<Args>(args)...);
     }
 
     template<typename... Args>
-    void info(std::format_string<Args...> fmt, Args&&... args,
-              std::source_location loc = std::source_location::current()) {
-        log(LogLevel::Info, fmt, std::forward<Args>(args)..., loc);
+    void info(std::source_location loc, std::format_string<Args...> fmt, Args&&... args) {
+        log(LogLevel::Info, loc, fmt, std::forward<Args>(args)...);
     }
 
     template<typename... Args>
-    void warn(std::format_string<Args...> fmt, Args&&... args,
-              std::source_location loc = std::source_location::current()) {
-        log(LogLevel::Warn, fmt, std::forward<Args>(args)..., loc);
+    void warn(std::source_location loc, std::format_string<Args...> fmt, Args&&... args) {
+        log(LogLevel::Warn, loc, fmt, std::forward<Args>(args)...);
     }
 
     template<typename... Args>
-    void error(std::format_string<Args...> fmt, Args&&... args,
-               std::source_location loc = std::source_location::current()) {
-        log(LogLevel::Error, fmt, std::forward<Args>(args)..., loc);
+    void error(std::source_location loc, std::format_string<Args...> fmt, Args&&... args) {
+        log(LogLevel::Error, loc, fmt, std::forward<Args>(args)...);
     }
 
 private:
@@ -96,10 +91,10 @@ private:
     std::mutex mutex_;
 };
 
-#define KAELUM_TRACE(...) Kaelum::Logger::instance().trace(__VA_ARGS__)
-#define KAELUM_DEBUG(...) Kaelum::Logger::instance().debug(__VA_ARGS__)
-#define KAELUM_INFO(...)  Kaelum::Logger::instance().info(__VA_ARGS__)
-#define KAELUM_WARN(...)  Kaelum::Logger::instance().warn(__VA_ARGS__)
-#define KAELUM_ERROR(...) Kaelum::Logger::instance().error(__VA_ARGS__)
+#define KAELUM_TRACE(fmt, ...) Kaelum::Logger::instance().trace(std::source_location::current(), fmt, ##__VA_ARGS__)
+#define KAELUM_DEBUG(fmt, ...) Kaelum::Logger::instance().debug(std::source_location::current(), fmt, ##__VA_ARGS__)
+#define KAELUM_INFO(fmt, ...)  Kaelum::Logger::instance().info(std::source_location::current(), fmt, ##__VA_ARGS__)
+#define KAELUM_WARN(fmt, ...)  Kaelum::Logger::instance().warn(std::source_location::current(), fmt, ##__VA_ARGS__)
+#define KAELUM_ERROR(fmt, ...) Kaelum::Logger::instance().error(std::source_location::current(), fmt, ##__VA_ARGS__)
 
 } // namespace Kaelum

@@ -53,4 +53,14 @@ struct CellSize {
     uint32_t height = 0;
 };
 
+struct GridSize {
+    uint32_t cols = 0;
+    uint32_t rows = 0;
+};
+
+struct ScreenSize {
+    uint32_t width = 0;
+    uint32_t height = 0;
+};
+
 } // namespace Kaelum

@@ -1,224 +1,135 @@
 #include "glyph_engine.hpp"
-#include <print>
-#include <cstring>
-#include <algorithm>
-#include <cmath>
+#include "logger.hpp"
+#include <ft2build.h>
+#include FT_FREETYPE_H
+#include <unicode/utf8.h>
+#include <unistd.h>
+#include <fcntl.h>
 
 namespace Kaelum {
 
 GlyphEngine::GlyphEngine() {
-    if (FT_Init_FreeType(&library_)) {
-        std::println(stderr, "GlyphEngine: Failed to initialize FreeType");
+    if (FT_Init_FreeType(&ft_lib_) != 0) {
+        KAELUM_ERROR("Failed to initialize FreeType");
     }
 }
 
 GlyphEngine::~GlyphEngine() {
-    if (face_) FT_Done_Face(face_);
-    if (library_) FT_Done_FreeType(library_);
+    if (ft_face_) FT_Done_Face(ft_face_);
+    if (ft_lib_) FT_Done_FreeType(ft_lib_);
 }
 
-void GlyphEngine::set_font_size(uint32_t size) {
-    if (size == font_size_) return;
-    font_size_ = size;
-    if (face_) {
-        FT_Set_Pixel_Sizes(face_, 0, font_size_);
-        line_height_ = static_cast<uint32_t>(face_->size->metrics.height >> 6);
-        cell_width_ = static_cast<uint32_t>(face_->size->metrics.max_advance >> 6);
-        glyphs_.clear();
-        atlas_cursor_x_ = 1;
-        atlas_cursor_y_ = 1;
-        atlas_row_height_ = 0;
-        std::fill(atlas_data_.begin(), atlas_data_.end(), 0);
-        atlas_dirty_ = false;
-    }
-}
+Kaelum::Expected<void, std::string> GlyphEngine::load_font(const std::string& family) {
+    if (!ft_lib_) return Kaelum::make_unexpected("FreeType not initialized");
 
-std::expected<void, GlyphError> GlyphEngine::load_font(const std::string& font_family) {
-    FcPattern* pattern = FcNameParse(reinterpret_cast<const FcChar8*>(font_family.c_str()));
-    if (!pattern) {
-        std::println(stderr, "GlyphEngine: Failed to parse font name");
-        return std::unexpected(GlyphError::FontConfigError);
-    }
-
-    FcResult result;
-    FcPattern* matched_pattern = FcFontMatch(nullptr, pattern, &result);
-    if (!matched_pattern) {
-        std::println(stderr, "GlyphEngine: Could not find match for font family {}", font_family);
-        FcPatternDestroy(pattern);
-        return std::unexpected(GlyphError::FontLoadFailed);
+    std::string font_path;
+    if (family.empty() || family == "monospace") {
+        // Try common monospace fonts
+        const char* fonts[] = {
+            "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+            "/usr/share/fonts/TTF/Hack-Regular.ttf",
+            "/usr/share/fonts/truetype/hack/Hack-Regular.ttf",
+            "/usr/share/fonts/TTF/FiraCode-Regular.ttf",
+            "/usr/share/fonts/truetype/firacode/FiraCode-Regular.ttf",
+            "/usr/share/fonts/TTF/JetBrainsMono-Regular.ttf",
+            nullptr
+        };
+        for (const char** f = fonts; *f; ++f) {
+            if (access(*f, R_OK) == 0) {
+                font_path = *f;
+                break;
+            }
+        }
+    } else {
+        font_path = family;
     }
 
-    FcChar8* font_path = nullptr;
-    if (FcPatternGetString(matched_pattern, FC_FILE, 0, &font_path) != FcResultMatch) {
-        std::println(stderr, "GlyphEngine: Could not get font path from matched pattern");
-        FcPatternDestroy(pattern);
-        FcPatternDestroy(matched_pattern);
-        return std::unexpected(GlyphError::FontLoadFailed);
+    if (font_path.empty()) {
+        return Kaelum::make_unexpected("No font found");
     }
 
-    if (FT_New_Face(library_, reinterpret_cast<const char*>(font_path), 0, &face_)) {
-        std::println(stderr, "GlyphEngine: Failed to load font face from {}",
-                     reinterpret_cast<const char*>(font_path));
-        FcPatternDestroy(pattern);
-        FcPatternDestroy(matched_pattern);
-        return std::unexpected(GlyphError::FontLoadFailed);
+    if (ft_face_) FT_Done_Face(ft_face_);
+    
+    if (FT_New_Face(ft_lib_, font_path.c_str(), 0, &ft_face_) != 0) {
+        return Kaelum::make_unexpected("Failed to load font: " + font_path);
     }
 
-    FT_Set_Pixel_Sizes(face_, 0, font_size_);
-    line_height_ = static_cast<uint32_t>(face_->size->metrics.height >> 6);
-    cell_width_ = static_cast<uint32_t>(face_->size->metrics.max_advance >> 6);
+    // Set pixel size
+    if (FT_Set_Pixel_Sizes(ft_face_, 0, 16) != 0) {
+        return Kaelum::make_unexpected("Failed to set pixel size");
+    }
 
-    if (cell_width_ == 0) cell_width_ = line_height_ / 2;
-
-    FcPatternDestroy(pattern);
-    FcPatternDestroy(matched_pattern);
+    cell_width_ = ft_face_->size->metrics.max_advance >> 6;
+    line_height_ = (ft_face_->size->metrics.height >> 6) + 2;
 
     // Initialize atlas
-    atlas_data_.resize(atlas_width_ * atlas_height_, 0);
-
+    atlas_data_.assign(atlas_width_ * atlas_height_, 0);
+    
+    KAELUM_INFO("Font loaded: {} ({}x{})", font_path, cell_width_, line_height_);
     return {};
 }
 
-std::expected<GlyphBitmap, GlyphError> GlyphEngine::render_codepoint(char32_t cp) {
-    if (!face_) {
-        return std::unexpected(GlyphError::FontLoadFailed);
-    }
-
-    FT_UInt glyph_index = FT_Get_Char_Index(face_, cp);
-    if (glyph_index == 0) {
-        // Use replacement character
-        glyph_index = FT_Get_Char_Index(face_, 0xFFFD);
-        if (glyph_index == 0) {
-            return std::unexpected(GlyphError::GlyphNotFound);
-        }
-    }
-
-    if (FT_Load_Glyph(face_, glyph_index, FT_LOAD_RENDER)) {
-        return std::unexpected(GlyphError::FreeTypeError);
-    }
-
-    FT_Bitmap& bitmap = face_->glyph->bitmap;
-
-    GlyphBitmap result;
-    result.width = bitmap.width;
-    result.height = bitmap.rows;
-    result.bearing_x = face_->glyph->bitmap_left;
-    result.bearing_y = face_->glyph->bitmap_top;
-    result.advance = static_cast<uint32_t>(face_->glyph->advance.x >> 6);
-
-    if (bitmap.width > 0 && bitmap.rows > 0) {
-        result.pixels.resize(bitmap.width * bitmap.rows);
-
-        if (bitmap.pixel_mode == FT_PIXEL_MODE_MONO) {
-            for (uint32_t y = 0; y < bitmap.rows; ++y) {
-                for (uint32_t x = 0; x < bitmap.width; ++x) {
-                    int byte_idx = y * bitmap.pitch + (x / 8);
-                    int bit_idx = 7 - (x % 8);
-                    result.pixels[y * bitmap.width + x] =
-                        (bitmap.buffer[byte_idx] & (1 << bit_idx)) ? 255 : 0;
-                }
-            }
-        } else if (bitmap.pixel_mode == FT_PIXEL_MODE_GRAY) {
-            std::memcpy(result.pixels.data(), bitmap.buffer,
-                        bitmap.width * bitmap.rows);
-        } else {
-            std::memset(result.pixels.data(), 255, bitmap.width * bitmap.rows);
-        }
-    }
-
-    return result;
-}
-
-const AtlasGlyph* GlyphEngine::get_glyph(char32_t cp) {
-    auto it = glyphs_.find(cp);
-    if (it != glyphs_.end()) {
-        return &it->second;
-    }
+const AtlasGlyph* GlyphEngine::get_glyph(char32_t codepoint) {
+    auto it = glyph_cache_.find(codepoint);
+    if (it != glyph_cache_.end()) return &it->second;
     return nullptr;
 }
 
-std::expected<AtlasGlyph, GlyphError> GlyphEngine::cache_glyph(char32_t cp) {
-    // Check if already cached
-    if (auto* existing = get_glyph(cp)) {
-        return *existing;
+Kaelum::Expected<AtlasGlyph, std::string> GlyphEngine::cache_glyph(char32_t codepoint) {
+    if (!ft_face_) return Kaelum::Expected<AtlasGlyph, std::string>("Font not loaded");
+
+    FT_UInt glyph_index = FT_Get_Char_Index(ft_face_, codepoint);
+    if (glyph_index == 0) {
+        // Missing glyph
+        AtlasGlyph g{0, 0, 0, 0, 0, 0, 0};
+        glyph_cache_[codepoint] = g;
+        return g;
     }
 
-    auto bitmap_res = render_codepoint(cp);
-    if (!bitmap_res) {
-        return std::unexpected(bitmap_res.error());
+    if (FT_Load_Glyph(ft_face_, glyph_index, FT_LOAD_RENDER | FT_LOAD_TARGET_NORMAL) != 0) {
+        return Kaelum::Expected<AtlasGlyph, std::string>("Failed to load glyph");
     }
 
-    auto atlas_res = pack_into_atlas(*bitmap_res);
-    if (atlas_res) {
-        glyphs_.emplace(cp, *atlas_res);
-    }
-    return atlas_res;
-}
+    FT_Bitmap& bitmap = ft_face_->glyph->bitmap;
+    AtlasGlyph glyph;
+    glyph.advance = ft_face_->glyph->advance.x >> 6;
+    glyph.x_offset = ft_face_->glyph->bitmap_left;
+    glyph.y_offset = -ft_face_->glyph->bitmap_top;
 
-std::expected<AtlasGlyph, GlyphError> GlyphEngine::pack_into_atlas(const GlyphBitmap& bitmap) {
-    uint32_t gw = std::max(bitmap.width, 1u);
-    uint32_t gh = std::max(bitmap.height, 1u);
-
-    // Add 1 pixel padding
-    gw += 2;
-    gh += 2;
-
-    if (atlas_cursor_x_ + gw >= atlas_width_) {
-        atlas_cursor_x_ = 1;
-        atlas_cursor_y_ += atlas_row_height_ + 1;
+    // Check if we need more space in atlas
+    if (atlas_next_x_ + bitmap.width + 1 >= atlas_width_) {
+        atlas_next_x_ = 0;
+        atlas_next_y_ += atlas_row_height_ + 1;
         atlas_row_height_ = 0;
     }
-
-    if (atlas_cursor_y_ + gh >= atlas_height_) {
-        grow_atlas();
+    if (atlas_next_y_ + bitmap.rows + 1 >= atlas_height_) {
+        return Kaelum::Expected<AtlasGlyph, std::string>("Atlas full");
     }
 
-    atlas_row_height_ = std::max(atlas_row_height_, gh);
+    // Pack glyph into atlas
+    glyph.u0 = atlas_next_x_;
+    glyph.v0 = atlas_next_y_;
+    glyph.u1 = atlas_next_x_ + bitmap.width;
+    glyph.v1 = atlas_next_y_ + bitmap.rows;
 
-    // Copy glyph into atlas
-    for (uint32_t y = 0; y < bitmap.height; ++y) {
-        uint32_t atlas_y = atlas_cursor_y_ + 1 + y;
-        for (uint32_t x = 0; x < bitmap.width; ++x) {
-            uint32_t atlas_x = atlas_cursor_x_ + 1 + x;
-            atlas_data_[atlas_y * atlas_width_ + atlas_x] =
-                bitmap.pixels[y * bitmap.width + x];
+    // Copy bitmap data to atlas
+    for (int y = 0; y < bitmap.rows; ++y) {
+        for (int x = 0; x < bitmap.width; ++x) {
+            size_t src_idx = y * bitmap.pitch + x;
+            size_t dst_idx = (atlas_next_y_ + y) * atlas_width_ + atlas_next_x_ + x;
+            if (dst_idx < atlas_data_.size()) {
+                atlas_data_[dst_idx] = bitmap.buffer[src_idx];
+            }
         }
     }
 
-    AtlasGlyph ag;
-    ag.u0 = (static_cast<float>(atlas_cursor_x_ + 1)) / static_cast<float>(atlas_width_);
-    ag.v0 = (static_cast<float>(atlas_cursor_y_ + 1)) / static_cast<float>(atlas_height_);
-    ag.u1 = (static_cast<float>(atlas_cursor_x_ + 1 + bitmap.width)) / static_cast<float>(atlas_width_);
-    ag.v1 = (static_cast<float>(atlas_cursor_y_ + 1 + bitmap.height)) / static_cast<float>(atlas_height_);
-
-    ag.bearing_x = bitmap.bearing_x;
-    ag.bearing_y = bitmap.bearing_y;
-    ag.width = bitmap.width;
-    ag.height = bitmap.height;
-    ag.advance = bitmap.advance;
-
-    atlas_cursor_x_ += gw;
+    atlas_next_x_ += bitmap.width + 1;
+    if (bitmap.rows > atlas_row_height_) atlas_row_height_ = bitmap.rows;
     atlas_dirty_ = true;
 
-    return ag;
-}
-
-void GlyphEngine::grow_atlas() {
-    uint32_t new_w = atlas_width_ * 2;
-    uint32_t new_h = atlas_height_ * 2;
-
-    std::vector<uint8_t> new_data(new_w * new_h, 0);
-
-    for (uint32_t y = 0; y < atlas_height_; ++y) {
-        std::memcpy(&new_data[y * new_w], &atlas_data_[y * atlas_width_], atlas_width_);
-    }
-
-    atlas_width_ = new_w;
-    atlas_height_ = new_h;
-    atlas_data_ = std::move(new_data);
-    atlas_dirty_ = true;
-
-    std::println(stdout, "GlyphEngine: Atlas grown to {}x{}", atlas_width_, atlas_height_);
+    glyph_cache_[codepoint] = glyph;
+    return glyph;
 }
 
 } // namespace Kaelum
